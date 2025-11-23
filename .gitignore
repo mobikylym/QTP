@@ -1,4 +1,62 @@
-.idea
-.venv
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Pytest & тестовые артефакты
+.pytest_cache/
+.cache/
+*.log
+*.spec
+report/
+logs/
+
+# Сборка и установка
+build/
+dist/
+*.egg-info/
+*.egg/
+*.whl
+.eggs/
+*.manifest
+*.lock
+.QTP.egg-info/
+QTP.egg-info/
+.distr/
+
+# IDE
+.idea/
+.vscode/
+
+# Зависимости и окружение
+.venv/
+venv/
+env/
+ENV/
+apiary-env
+cfg_env*
 .env
-uv.lock
+
+# Nox
+.nox/
+
+# Mypy
+.mypy_cache/
+dmypy.json
+
+# Ruff
+.ruff_cache/
+
+# Удалённые / промежуточные каталоги проекта
+__deb_dist/
+__*logs
+__dist*
+*__repo_data
+
+# Архивы и временные файлы
+dist.zip
+*.tmp
+*.bak
+*.swp
+*~

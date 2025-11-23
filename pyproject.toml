@@ -2,5 +2,95 @@
 name = "qtp"
 version = "0.1.0"
 description = "Add your description here"
-requires-python = ">=3.13"
-dependencies = []
+requires-python = "==3.13.7"
+dependencies = [
+    "fastapi",
+    "nox==2025.11.12",
+    "uvicorn[standard]",
+    "pydantic",
+    "pydantic-settings",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg",
+    "alembic",
+    "streamlit",
+    "python-multipart",
+    "structlog",
+
+]
+
+[project.optional-dependencies]
+dev = [
+    # Инструменты разработки — линтеры, тесты, запуск, типы для dev-зависимостей, а также библиотеки для генератора API
+    "mypy==1.18.2",
+    "mypy-extensions==1.1.0",
+    "ruff==0.14.6",
+    "deptry==0.24.0",
+    "pycodestyle==2.14.0",
+    "types-requests==2.32.4.20250913",
+    "inflect==7.5.0",
+]
+
+[tool.deptry.per_rule_ignores]
+DEP001 = [
+    "src",
+]
+# Не ругаться на то, что pytest и другие зависимости не используются как модули
+DEP002 = [
+    "nox",
+    "uvicorn",
+    "asyncpg",
+    "alembic",
+    "python-multipart",
+    "structlog",
+    "mypy",
+    "mypy-extensions",
+    "ruff",
+    "deptry",
+    "pycodestyle",
+    "types-requests",
+    "inflect",
+
+]
+
+DEP003 = [
+    "src",
+    "starlette",
+    "requests",
+]
+
+[tool.ruff]
+output-format = "concise"
+line-length = 120
+target-version = "py313"
+exclude = [".git", ".mypy_cache", ".venv", "build", "dist"]
+
+[tool.ruff.lint]
+extend-select = [
+    "I", "N", "B", "UP", "ERA", "F", "SIM", "D",
+    "A", "BLE001", "C901", "S", "SLF001", "T", "W", "ASYNC", "PLE", "PIE"
+]
+# TODO: настроить логгер и исключить T201 из этого списка, заменив все принты.
+ignore = ["N815", "D100", "D104", "D203", "D212", "D400", "D415", "S101", "S311", "T201", "D101", "D102", "D103"]
+
+[tool.ruff.lint.per-file-ignores]
+
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "space"
+line-ending = "auto"
+docstring-code-format = true
+skip-magic-trailing-comma = false
+preview = true
+
+[tool.mypy]
+python_version = "3.13"
+plugins = ["pydantic.mypy"]
+mypy_path = "typings"
+no_implicit_optional = false
+check_untyped_defs = true
+strict = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unreachable = true
+show_error_codes = true
+explicit_package_bases = true
