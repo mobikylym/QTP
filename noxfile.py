@@ -59,7 +59,3 @@ def dev(session):
     subprocess.Popen(
         ['uv', 'run', 'python', str(BACKEND)],
     )
-
-    subprocess.Popen(
-        ['uv', 'run', 'streamlit', 'run', str(FRONTEND), '--server.port', '8501'],
-    )

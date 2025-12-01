@@ -1,27 +1,25 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
 
+from src.app.api.http import auth, home
 from src.app.api.http import entities as entities_api
 from src.app.api.websocket.ws import manager
 from src.app.core.config import settings
-from src.app.storage.database import init_models
+from src.app.services.admin_init import ensure_admin_exists
+from src.app.storage.database import AsyncSessionLocal, init_models
 
 app = FastAPI(title=settings.APP_NAME)
 app.include_router(entities_api.router, prefix='/api')
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=['http://localhost:8501'],  # streamlit dev UI
-    allow_credentials=True,
-    allow_methods=['*'],
-    allow_headers=['*'],
-)
+app.include_router(auth.router)
+app.include_router(home.router)
 
 
 @app.on_event('startup')
 async def startup_event():
     # создаём таблицы (для прототипа)
     await init_models()
+
+    async with AsyncSessionLocal() as session:
+        await ensure_admin_exists(session)
 
 
 @app.websocket('/ws/{channel_id}')

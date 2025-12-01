@@ -2,8 +2,18 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from .models import Acknowledge, Channel, Comment, Entity, EntityStatusEnum, User
+from .models import (
+    Acknowledge,
+    Channel,
+    Comment,
+    DefectEntity,
+    Entity,
+    QuestionEntity,
+    TaskEntity,
+    User,
+)
 
 
 class Repository:
@@ -12,12 +22,12 @@ class Repository:
 
     # --- Users / Channels (helpful for prototype) ---
     async def get_or_create_user(self, username: str, display_name: str | None = None) -> User:
-        q = select(User).where(User.username == username)
+        q = select(User).where(User.login == username)
         r = await self.session.execute(q)
         user = r.scalar_one_or_none()
         if user:
             return user
-        user = User(username=username, display_name=display_name)
+        user = User(login=username, display_name=display_name)
         self.session.add(user)
         await self.session.flush()
         return user
@@ -44,21 +54,21 @@ class Repository:
         r = await self.session.execute(q)
         return r.scalar_one_or_none()
 
-    async def list_entities_for_channel(self, channel_id: str, limit: int = 50, offset: int = 0) -> list[Entity]:
+    async def list_entities_for_channel(self, channel_id: str, limit=50, offset=0):
         q = (
             select(Entity)
             .where(Entity.channel_id == channel_id)
+            .options(
+                selectinload(Entity.question),
+                selectinload(Entity.defect),
+                selectinload(Entity.task),
+            )
             .order_by(Entity.created_at.desc())
             .limit(limit)
             .offset(offset)
         )
         r = await self.session.execute(q)
         return r.scalars().all()
-
-    async def update_entity_status(self, entity_id: str, new_status: EntityStatusEnum):
-        q = update(Entity).where(Entity.id == entity_id).values(status=new_status)
-        await self.session.execute(q)
-        await self.session.flush()
 
     # --- Comments ---
     async def add_comment(self, comment: Comment) -> Comment:
@@ -82,3 +92,48 @@ class Repository:
             self.session.add(ack)
         await self.session.flush()
         return ack
+
+    async def get_question(self, entity_id: str) -> QuestionEntity | None:
+        q = select(QuestionEntity).where(QuestionEntity.entity_id == entity_id)
+        r = await self.session.execute(q)
+        return r.scalar_one_or_none()
+
+    async def get_defect(self, entity_id: str) -> DefectEntity | None:
+        q = select(DefectEntity).where(DefectEntity.entity_id == entity_id)
+        r = await self.session.execute(q)
+        return r.scalar_one_or_none()
+
+    async def get_task(self, entity_id: str) -> TaskEntity | None:
+        q = select(TaskEntity).where(TaskEntity.entity_id == entity_id)
+        r = await self.session.execute(q)
+        return r.scalar_one_or_none()
+
+    async def update_question_status(self, entity_id: str, new_status):
+        q = (
+            update(QuestionEntity)
+            .where(QuestionEntity.entity_id == entity_id)
+            .values(status=new_status)
+            .execution_options(synchronize_session='fetch')
+        )
+        await self.session.execute(q)
+        await self.session.flush()
+
+    async def update_defect_status(self, entity_id: str, new_status):
+        q = (
+            update(DefectEntity)
+            .where(DefectEntity.entity_id == entity_id)
+            .values(status=new_status)
+            .execution_options(synchronize_session='fetch')
+        )
+        await self.session.execute(q)
+        await self.session.flush()
+
+    async def update_task_status(self, entity_id: str, new_status):
+        q = (
+            update(TaskEntity)
+            .where(TaskEntity.entity_id == entity_id)
+            .values(status=new_status)
+            .execution_options(synchronize_session='fetch')
+        )
+        await self.session.execute(q)
+        await self.session.flush()

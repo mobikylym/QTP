@@ -1,21 +1,23 @@
 [project]
 name = "qtp"
 version = "0.1.0"
-description = "Add your description here"
+description = "Quick Task Pipline messanger"
 requires-python = "==3.13.7"
 dependencies = [
-    "fastapi",
+    "fastapi==0.121.3",
     "nox==2025.11.12",
     "uvicorn[standard]",
-    "pydantic",
+    "pydantic==2.12.4",
     "pydantic-settings",
-    "sqlalchemy[asyncio]>=2.0",
-    "asyncpg",
+    "sqlalchemy[asyncio]==2.0.44",
+    "asyncpg==0.30.0",
     "alembic",
     "streamlit",
     "python-multipart",
     "structlog",
-
+    "passlib==1.7.4",
+    "bcrypt==4.0.1",
+    "pyjwt==2.10.1",
 ]
 
 [project.optional-dependencies]
@@ -49,6 +51,7 @@ DEP002 = [
     "pycodestyle",
     "types-requests",
     "inflect",
+    "bcrypt",
 
 ]
 

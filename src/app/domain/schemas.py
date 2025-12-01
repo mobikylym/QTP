@@ -25,28 +25,58 @@ class CommentOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class EntityCreate(BaseModel):
+class QuestionCreate(BaseModel):
     channel_id: str
     author_id: str
-    type: EntityTypeEnum
     title: str
-    body: str | None = None
+    body: str
     priority: int = 0
-    due_at: datetime | None = None
 
 
-class EntityOut(BaseModel):
+class DefectCreate(BaseModel):
+    channel_id: str
+    author_id: str
+    title: str
+    body: str
+    severity: int
+    reproducible: bool
+
+
+class TaskCreate(BaseModel):
+    channel_id: str
+    author_id: str
+    title: str
+    body: str
+    severity: int
+    reproducible: bool
+
+
+class EntityBaseOut(BaseModel):
     id: str
     channel_id: str
     author_id: str
     type: EntityTypeEnum
     status: EntityStatusEnum
     title: str
-    body: str | None
-    priority: int
-    due_at: datetime | None
     created_at: datetime
     updated_at: datetime
-    comments: list[CommentOut] = []
 
+
+class QuestionOut(EntityBaseOut):
+    body: str
+    priority: int
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DefectOut(EntityBaseOut):
+    body: str
+    severity: int
+    reproducible: bool
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TaskOut(EntityBaseOut):
+    body: str
+    severity: int
+    reproducible: bool
     model_config = ConfigDict(from_attributes=True)
