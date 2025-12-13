@@ -1,18 +1,19 @@
 from datetime import UTC, datetime, timedelta
 
 import jwt
-from fastapi import Depends, Form
+from fastapi import Depends, Form, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.app.api.http.entities import get_session
+from src.app.api.deps.database import get_session
 from src.app.api.http.router import router
 from src.app.storage.models import User
 
 pwd = CryptContext(schemes=['bcrypt'], deprecated='auto')
 JWT_SECRET = 'change_me'
+JWT_ALGORITHM = "HS256"
 JWT_EXP = 3600
 
 
@@ -143,9 +144,95 @@ async def login_submit(
         return HTMLResponse('Некорректный логин или пароль', status_code=401)
 
     token = jwt.encode(
-        {'sub': user.login, 'exp': datetime.now(UTC) + timedelta(seconds=JWT_EXP)}, JWT_SECRET, algorithm='HS256'
+        {'sub': user.login, 'exp': datetime.now(UTC) + timedelta(seconds=JWT_EXP)}, JWT_SECRET, algorithm=JWT_ALGORITHM
     )
 
-    response = RedirectResponse(url='/', status_code=302)
+    response = RedirectResponse(url='/task-explorer/', status_code=302)
     response.set_cookie('session', token, httponly=True, secure=False, samesite='lax', max_age=JWT_EXP)
     return response
+
+
+@router.post('/logout')
+async def logout(response: Response):
+    """Выход из системы - удаление сессионной куки"""
+    response.delete_cookie('session')
+    return RedirectResponse(url='/logged-out', status_code=302)
+
+
+@router.get('/logged-out', response_class=HTMLResponse)
+async def logged_out_page():
+    """Страница с сообщением об успешном выходе"""
+    html_content = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Logged Out</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100vh;
+                margin: 0;
+                background-color: #f5f5f5;
+            }
+            .message-box {
+                text-align: center;
+                padding: 40px;
+                background: white;
+                border-radius: 10px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            }
+            .countdown {
+                color: #666;
+                margin-top: 20px;
+                font-size: 0.9em;
+            }
+            .button {
+                display: inline-block;
+                margin-top: 20px;
+                padding: 10px 20px;
+                background-color: #007bff;
+                color: white;
+                text-decoration: none;
+                border-radius: 5px;
+            }
+            .button:hover {
+                background-color: #0056b3;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="message-box">
+            <h2>Successfully Logged Out</h2>
+            <p>You have been successfully logged out of the system.</p>
+            <div class="countdown">Redirecting to login page in <span id="countdown">3</span> seconds...</div>
+            <a href="/login" class="button">Go to Login Now</a>
+        </div>
+
+        <script>
+            let seconds = 3;
+            const countdownElement = document.getElementById('countdown');
+
+            const timer = setInterval(() => {
+                seconds--;
+                countdownElement.textContent = seconds;
+
+                if (seconds <= 0) {
+                    clearInterval(timer);
+                    window.location.href = '/login';
+                }
+            }, 1000);
+
+            // Автоматический редирект через 3 секунды на всякий случай
+            setTimeout(() => {
+                window.location.href = '/login';
+            }, 3000);
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
