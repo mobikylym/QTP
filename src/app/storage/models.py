@@ -19,11 +19,6 @@ def gen_uuid():
     return str(uuid.uuid4())
 
 
-# ---------------------------------------------------------
-# Enums
-# ---------------------------------------------------------
-
-
 class EntityTypeEnum(str, enum.Enum):
     question = 'question'
     defect = 'defect'
@@ -90,21 +85,12 @@ class ChannelGroupEnum(str, enum.Enum):
     accounting = 'accounting'
 
 
-# ---------------------------------------------------------
-# Many-to-many user <-> channel
-# ---------------------------------------------------------
-
 user_channels = Table(
     'user_channels',
     Base.metadata,
     Column('user_id', UUID(as_uuid=False), ForeignKey('users.id'), primary_key=True),
     Column('channel_id', UUID(as_uuid=False), ForeignKey('channels.id'), primary_key=True),
 )
-
-
-# ---------------------------------------------------------
-# Users
-# ---------------------------------------------------------
 
 
 class User(Base):
@@ -125,18 +111,12 @@ class User(Base):
         lazy='selectin',
     )
 
-    # personal chats
     direct_chats = relationship(
         'DirectChat',
         secondary='direct_chat_users',
         back_populates='users',
         lazy='selectin',
     )
-
-
-# ---------------------------------------------------------
-# Channels (group chats)
-# ---------------------------------------------------------
 
 
 class Channel(Base):
@@ -155,16 +135,10 @@ class Channel(Base):
         lazy='selectin',
     )
 
-    # entities inside this channel
     entities = relationship('Entity', back_populates='channel')
 
-    # topics inside this channel
     topics = relationship('Topic', back_populates='channel')
 
-
-# ---------------------------------------------------------
-# Direct Chats
-# ---------------------------------------------------------
 
 direct_chat_users = Table(
     'direct_chat_users',
@@ -190,11 +164,6 @@ class DirectChat(Base):
 
     entities = relationship('Entity', back_populates='direct_chat')
     topics = relationship('Topic', back_populates='direct_chat')
-
-
-# ---------------------------------------------------------
-# Base "thread" entity: could belong to channel or to direct chat
-# ---------------------------------------------------------
 
 
 class BaseThreadMixin:
@@ -225,11 +194,6 @@ class BaseThreadMixin:
         return relationship('User')
 
 
-# ---------------------------------------------------------
-# Topic (simple message)
-# ---------------------------------------------------------
-
-
 class Topic(Base, BaseThreadMixin):
     __tablename__ = 'topics'
 
@@ -242,11 +206,6 @@ class Topic(Base, BaseThreadMixin):
     direct_chat = relationship('DirectChat', back_populates='topics')
 
     comments = relationship('Comment', primaryjoin=lambda: foreign(Comment.thread_id) == Topic.id, viewonly=True)
-
-
-# ---------------------------------------------------------
-# Entity (structured thread)
-# ---------------------------------------------------------
 
 
 class Entity(Base, BaseThreadMixin):
@@ -262,18 +221,12 @@ class Entity(Base, BaseThreadMixin):
     channel = relationship('Channel', back_populates='entities')
     direct_chat = relationship('DirectChat', back_populates='entities')
 
-    # submodels one-to-one
     question = relationship('QuestionEntity', uselist=False)
     defect = relationship('DefectEntity', uselist=False)
     task = relationship('TaskEntity', uselist=False)
     info = relationship('InfoEntity', uselist=False)
     proposal = relationship('ProposalEntity', uselist=False)
     action_point = relationship('ActionPointEntity', uselist=False)
-
-
-# ---------------------------------------------------------
-# Question Entity
-# ---------------------------------------------------------
 
 
 class QuestionEntity(Base):
@@ -287,11 +240,6 @@ class QuestionEntity(Base):
     deadline = Column(DateTime(timezone=True), nullable=True)
 
     entity = relationship('Entity', back_populates='question')
-
-
-# ---------------------------------------------------------
-# Defect Entity
-# ---------------------------------------------------------
 
 
 class DefectEntity(Base):
@@ -314,11 +262,6 @@ class DefectEntity(Base):
     entity = relationship('Entity', back_populates='defect')
 
 
-# ---------------------------------------------------------
-# Task Entity
-# ---------------------------------------------------------
-
-
 class TaskEntity(Base):
     __tablename__ = 'entity_tasks'
 
@@ -339,11 +282,6 @@ class TaskEntity(Base):
     entity = relationship('Entity', back_populates='task')
 
 
-# ---------------------------------------------------------
-# Info Entity (per-user ack)
-# ---------------------------------------------------------
-
-
 class InfoEntity(Base):
     __tablename__ = 'entity_info'
 
@@ -352,7 +290,6 @@ class InfoEntity(Base):
     body = Column(Text)
     deadline = Column(DateTime(timezone=True), nullable=True)
 
-    # users required to acknowledge
     required_users = relationship('InfoRequiredUser', cascade='all, delete-orphan', back_populates='info')
 
     entity = relationship('Entity', back_populates='info')
@@ -369,11 +306,6 @@ class InfoRequiredUser(Base):
     user = relationship('User')
 
 
-# ---------------------------------------------------------
-# Proposal Entity
-# ---------------------------------------------------------
-
-
 class ProposalEntity(Base):
     __tablename__ = 'entity_proposals'
 
@@ -384,11 +316,6 @@ class ProposalEntity(Base):
     status = Column(Enum(ProposalStatus), default=ProposalStatus.created)
 
     entity = relationship('Entity', back_populates='proposal')
-
-
-# ---------------------------------------------------------
-# Action Point Entity
-# ---------------------------------------------------------
 
 
 class ActionPointEntity(Base):
@@ -408,11 +335,6 @@ class ActionPointEntity(Base):
     executor = relationship('User', foreign_keys=[executor_id])
 
 
-# ---------------------------------------------------------
-# Comments (unified: can attach to Entity or Topic)
-# ---------------------------------------------------------
-
-
 class Comment(Base):
     __tablename__ = 'comments'
 
@@ -425,18 +347,11 @@ class Comment(Base):
 
     author = relationship('User')
 
-    # Для Entity
     entity_thread = relationship(
         'Entity', primaryjoin=lambda: foreign(Comment.thread_id) == Entity.id, back_populates='comments', viewonly=True
     )
 
-    # Для Topic
     topic_thread = relationship('Topic', primaryjoin=lambda: foreign(Comment.thread_id) == Topic.id, viewonly=True)
-
-
-# ---------------------------------------------------------
-# Per-user acknowledge (used by info entity)
-# ---------------------------------------------------------
 
 
 class Acknowledge(Base):

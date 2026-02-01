@@ -22,30 +22,27 @@ from src.app.storage.models import (
     EntityTypeEnum,
     Topic,
     User,
-    user_channels,
+    user_channels, ActionPointEntity, ProposalEntity, TaskEntity, DefectEntity, QuestionEntity, InfoEntity,
+    InfoRequiredUser,
 )
 
 
 @router.get('/admin/', response_class=HTMLResponse)
 async def admin_panel_page(user_login=Depends(require_admin), session: AsyncSession = Depends(get_session)):
     """Страница админ-панели"""
-    # Получаем текущего пользователя
     user_query = select(User).where(User.login == user_login)
     user_result = await session.execute(user_query)
     user = user_result.scalar_one()
 
-    # Генерируем HTML страницу
     return generate_admin_panel_html(user)
 
 
 async def get_all_users_grouped(session: AsyncSession) -> dict[str, list[dict]]:
     """Получаем всех пользователей, сгруппированных по департаментам"""
-    # Получаем всех пользователей с их каналами
     users_query = select(User).options(selectinload(User.channels)).order_by(User.display_name)
     users_result = await session.execute(users_query)
     users = users_result.scalars().all()
 
-    # Группируем пользователей по департаментам
     grouped_users = {}
 
     for user in users:
@@ -70,12 +67,10 @@ async def get_all_users_grouped(session: AsyncSession) -> dict[str, list[dict]]:
 
 async def get_all_channels_grouped(session: AsyncSession) -> dict[str, list[dict]]:
     """Получаем все каналы, сгруппированные по группам"""
-    # Получаем все каналы с их пользователями
     channels_query = select(Channel).options(selectinload(Channel.users)).order_by(Channel.name)
     channels_result = await session.execute(channels_query)
     channels = channels_result.scalars().all()
 
-    # Группируем каналы по группам
     grouped_channels = {}
 
     for channel in channels:
@@ -116,7 +111,6 @@ async def get_user_detail(user_id: str, session: AsyncSession) -> dict[str, Any]
     if not user:
         raise HTTPException(status_code=404, detail='User not found')
 
-    # Группируем каналы по группам
     channels_by_group = {}
     for channel in user.channels:
         group_name = channel.group.value if channel.group else 'No Group'
@@ -144,7 +138,6 @@ async def get_channel_detail(channel_id: str, session: AsyncSession) -> dict[str
     if not channel:
         raise HTTPException(status_code=404, detail='Channel not found')
 
-    # Группируем пользователей по департаментам
     users_by_dept = {}
     for user in channel.users:
         dept_name = user.department.value if user.department else 'No Department'
@@ -164,37 +157,59 @@ async def get_channel_detail(channel_id: str, session: AsyncSession) -> dict[str
 
 async def delete_channel_cascade(channel_id: str, session: AsyncSession):
     """Удаляет канал и все связанные с ним сущности"""
-    # 1. Удаляем все подтверждения для Info entities в этом канале
-    info_entities_subquery = select(Entity.id).where(Entity.channel_id == channel_id)
-    acknowledges_delete = delete(Acknowledge).where(Acknowledge.entity_id.in_(info_entities_subquery))
-    await session.execute(acknowledges_delete)
-
-    # 2. Удаляем все комментарии к Topic и Entity в этом канале
-    # Комментарии к Topic
-    topics_subquery = select(Topic.id).where(Topic.channel_id == channel_id)
-    topic_comments_delete = delete(Comment).where(Comment.thread_id.in_(topics_subquery))
-    await session.execute(topic_comments_delete)
-
-    # Комментарии к Entity
     entities_subquery = select(Entity.id).where(Entity.channel_id == channel_id)
-    entity_comments_delete = delete(Comment).where(Comment.thread_id.in_(entities_subquery))
-    await session.execute(entity_comments_delete)
 
-    # 3. Удаляем все Topic в канале
-    topics_delete = delete(Topic).where(Topic.channel_id == channel_id)
-    await session.execute(topics_delete)
+    await session.execute(
+        delete(Acknowledge).where(Acknowledge.entity_id.in_(entities_subquery))
+    )
 
-    # 4. Удаляем все Entity в канале
-    entities_delete = delete(Entity).where(Entity.channel_id == channel_id)
-    await session.execute(entities_delete)
+    await session.execute(
+        delete(Comment).where(Comment.thread_id.in_(entities_subquery))
+    )
 
-    # 5. Удаляем связи пользователей с каналом (many-to-many)
-    channel_delete_assoc = delete(user_channels).where(user_channels.c.channel_id == channel_id)
-    await session.execute(channel_delete_assoc)
+    info_subquery = select(InfoEntity.entity_id).join(Entity).where(Entity.channel_id == channel_id)
+    await session.execute(
+        delete(InfoRequiredUser).where(InfoRequiredUser.info_id.in_(info_subquery))
+    )
 
-    # 6. Удаляем сам канал
-    channel_delete = delete(Channel).where(Channel.id == channel_id)
-    await session.execute(channel_delete)
+    await session.execute(
+        delete(InfoEntity).where(InfoEntity.entity_id.in_(entities_subquery))
+    )
+    await session.execute(
+        delete(QuestionEntity).where(QuestionEntity.entity_id.in_(entities_subquery))
+    )
+    await session.execute(
+        delete(DefectEntity).where(DefectEntity.entity_id.in_(entities_subquery))
+    )
+    await session.execute(
+        delete(TaskEntity).where(TaskEntity.entity_id.in_(entities_subquery))
+    )
+    await session.execute(
+        delete(ProposalEntity).where(ProposalEntity.entity_id.in_(entities_subquery))
+    )
+    await session.execute(
+        delete(ActionPointEntity).where(ActionPointEntity.entity_id.in_(entities_subquery))
+    )
+
+    await session.execute(
+        delete(Entity).where(Entity.channel_id == channel_id)
+    )
+
+    topics_subquery = select(Topic.id).where(Topic.channel_id == channel_id)
+    await session.execute(
+        delete(Comment).where(Comment.thread_id.in_(topics_subquery))
+    )
+    await session.execute(
+        delete(Topic).where(Topic.channel_id == channel_id)
+    )
+
+    await session.execute(
+        delete(user_channels).where(user_channels.c.channel_id == channel_id)
+    )
+
+    await session.execute(
+        delete(Channel).where(Channel.id == channel_id)
+    )
 
     await session.commit()
 
@@ -208,15 +223,13 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Admin Panel</title>
+        <title>Панель администратора</title>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-            /* Reset box-sizing for all elements */
             *, *::before, *::after {{
                 box-sizing: border-box;
             }}
-
             body, html {{
                 margin: 0;
                 height: 100%;
@@ -380,7 +393,6 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                 color: #666;
             }}
 
-            /* Модальные окна и дроверы - стили из chat_channel_view.py */
             .modal-overlay {{
                 position: fixed;
                 top: 0;
@@ -391,7 +403,7 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                 display: none;
                 justify-content: center;
                 align-items: center;
-                z-index: 2000; /* Увеличено для отображения поверх дроверов */
+                z-index: 2000;
             }}
             .modal {{
                 background-color: white;
@@ -484,8 +496,6 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
             .create-btn:hover, .save-btn:hover {{
                 background-color: #46d975;
             }}
-
-            /* Дровер */
             .drawer-overlay {{
                 position: fixed;
                 top: 0;
@@ -557,7 +567,6 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                 border-radius: 4px;
                 border-left: 3px solid #5865f2;
             }}
-            
             .alert {{
                 padding: 10px 15px;
                 border-radius: 5px;
@@ -582,8 +591,6 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                 color: #888;
                 margin-top: 4px;
             }}
-
-            /* Стили для списков чекбоксов */
             .checkbox-list {{
                 max-height: 200px;
                 overflow-y: auto;
@@ -600,8 +607,6 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                 margin-bottom: 8px;
                 color: #555;
             }}
-
-            /* Статус администратора */
             .admin-badge {{
                 display: inline-block;
                 padding: 2px 8px;
@@ -615,23 +620,20 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
     </head>
     <body>
         <div class="container">
-            <div class="sidebar" id="sidebar">
-                <!-- Навигация будет загружена через JavaScript -->
-            </div>
+            <div class="sidebar" id="sidebar"></div>
 
             <div class="main-content">
                 <div class="header">
-                    <h2>Admin Panel</h2>
+                    <h2>Панель администратора</h2>
                     <div class="admin-actions">
-                        <button class="admin-btn" id="add-user-btn">Add User</button>
-                        <button class="admin-btn" id="add-channel-btn">Add Channel</button>
+                        <button class="admin-btn" id="add-user-btn">Добавить пользователя</button>
+                        <button class="admin-btn" id="add-channel-btn">Добавить канал</button>
                     </div>
                 </div>
 
-                <!-- Секция пользователей -->
                 <div class="admin-section" id="users-section">
                     <div class="section-header" onclick="toggleSection('users')">
-                        <div class="section-title">Users</div>
+                        <div class="section-title">Пользователи</div>
                         <div class="section-toggle">▼</div>
                     </div>
                     <div class="section-content" id="users-content">
@@ -641,10 +643,9 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                     </div>
                 </div>
 
-                <!-- Секция каналов -->
                 <div class="admin-section" id="channels-section">
                     <div class="section-header" onclick="toggleSection('channels')">
-                        <div class="section-title">Channels</div>
+                        <div class="section-title">Каналы</div>
                         <div class="section-toggle">▼</div>
                     </div>
                     <div class="section-content" id="channels-content">
@@ -656,11 +657,10 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
             </div>
         </div>
 
-        <!-- Модальное окно для создания пользователя -->
         <div class="modal-overlay" id="create-user-modal-overlay">
             <div class="modal" id="create-user-modal">
                 <div class="modal-header">
-                    <div class="modal-title">Create User</div>
+                    <div class="modal-title">Создать пользователя</div>
                     <button class="close-modal" id="close-create-user-modal">&times;</button>
                 </div>
                 
@@ -668,32 +668,32 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                 
                 <form id="create-user-form">
                     <div class="form-group">
-                        <label class="form-label" for="user-login">Login</label>
+                        <label class="form-label" for="user-login">Логин</label>
                         <input type="text" class="form-input" id="user-login" required>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label" for="user-display-name">Display Name</label>
+                        <label class="form-label" for="user-display-name">Отображаемое имя</label>
                         <input type="text" class="form-input" id="user-display-name" required>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label" for="user-password">Password</label>
+                        <label class="form-label" for="user-password">Пароль</label>
                         <input type="password" class="form-input" id="user-password" required>
                         <div style="font-size: 12px; color: #888; margin-top: 4px;">
-                            Password must be at least 6 characters long
+                            Пароль должен содержать как минимум 6 символов
                         </div>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label" for="user-password-confirm">Confirm Password</label>
+                        <label class="form-label" for="user-password-confirm">Подтверждение пароля</label>
                         <input type="password" class="form-input" id="user-password-confirm" required>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label" for="user-department">Department</label>
+                        <label class="form-label" for="user-department">Отдел</label>
                         <select class="form-select" id="user-department" required>
-                            <option value="">Select department...</option>
+                            <option value="">Выберите подразделение...</option>
                             <!-- Departments will be populated via JavaScript -->
                         </select>
                     </div>
@@ -701,30 +701,29 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                     <div class="form-group">
                         <label class="checkbox-label">
                             <input type="checkbox" class="form-checkbox" id="user-is-admin">
-                            <span>Admin user</span>
+                            <span>Права администратора</span>
                         </label>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label">Channels</label>
+                        <label class="form-label">Каналы</label>
                         <div class="checkbox-list" id="user-channels-list">
                             <!-- Channels grouped by groups will be populated via JavaScript -->
                         </div>
                     </div>
 
                     <div class="modal-footer">
-                        <button type="button" class="cancel-btn" id="cancel-create-user">Cancel</button>
-                        <button type="submit" class="create-btn">Create User</button>
+                        <button type="button" class="cancel-btn" id="cancel-create-user">Отменить</button>
+                        <button type="submit" class="create-btn">Создать пользователя</button>
                     </div>
                 </form>
             </div>
         </div>
 
-        <!-- Модальное окно для редактирования пользователя -->
         <div class="modal-overlay" id="edit-user-modal-overlay">
             <div class="modal" id="edit-user-modal">
                 <div class="modal-header">
-                    <div class="modal-title">Edit User</div>
+                    <div class="modal-title">Редактировать пользователя</div>
                     <button class="close-modal" id="close-edit-user-modal">&times;</button>
                 </div>
                 
@@ -734,31 +733,31 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                     <input type="hidden" id="edit-user-id">
 
                     <div class="form-group">
-                        <label class="form-label" for="edit-user-login">Login</label>
+                        <label class="form-label" for="edit-user-login">Логин</label>
                         <input type="text" class="form-input" id="edit-user-login" required>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label" for="edit-user-display-name">Display Name</label>
+                        <label class="form-label" for="edit-user-display-name">Отображаемое имя</label>
                         <input type="text" class="form-input" id="edit-user-display-name" required>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label" for="edit-user-password">New Password</label>
+                        <label class="form-label" for="edit-user-password">Новый пароль</label>
                         <input type="password" class="form-input" id="edit-user-password" 
-                               placeholder="Leave blank to keep current password">
+                               placeholder="Оставьте пустым для сохранения текущего пароля">
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label" for="edit-user-password-confirm">Confirm New Password</label>
+                        <label class="form-label" for="edit-user-password-confirm">Подтверждение нового пароля</label>
                         <input type="password" class="form-input" id="edit-user-password-confirm" 
-                               placeholder="Confirm new password">
+                               placeholder="Повторите новый пароль">
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label" for="edit-user-department">Department</label>
+                        <label class="form-label" for="edit-user-department">Отдел</label>
                         <select class="form-select" id="edit-user-department" required>
-                            <option value="">Select department...</option>
+                            <option value="">Выберите подразделение...</option>
                             <!-- Departments will be populated via JavaScript -->
                         </select>
                     </div>
@@ -766,108 +765,99 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                     <div class="form-group">
                         <label class="checkbox-label">
                             <input type="checkbox" class="form-checkbox" id="edit-user-is-admin">
-                            <span>Admin user</span>
+                            <span>Права администратора</span>
                         </label>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label">Channels</label>
+                        <label class="form-label">Каналы</label>
                         <div class="checkbox-list" id="edit-user-channels-list">
                             <!-- Channels grouped by groups will be populated via JavaScript -->
                         </div>
                     </div>
 
                     <div class="modal-footer">
-                        <button type="button" class="cancel-btn" id="cancel-edit-user">Cancel</button>
-                        <button type="submit" class="save-btn">Save Changes</button>
+                        <button type="button" class="cancel-btn" id="cancel-edit-user">Отменить</button>
+                        <button type="submit" class="save-btn">Сохранить изменения</button>
                     </div>
                 </form>
             </div>
         </div>
 
-        <!-- Модальное окно для создания канала -->
         <div class="modal-overlay" id="create-channel-modal-overlay">
             <div class="modal" id="create-channel-modal">
                 <div class="modal-header">
-                    <div class="modal-title">Create Channel</div>
+                    <div class="modal-title">Создание канала</div>
                     <button class="close-modal" id="close-create-channel-modal">&times;</button>
                 </div>
                 <form id="create-channel-form">
                     <div class="form-group">
-                        <label class="form-label" for="channel-name">Channel Name</label>
+                        <label class="form-label" for="channel-name">Наименование канала</label>
                         <input type="text" class="form-input" id="channel-name" required>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label" for="channel-group">Group</label>
+                        <label class="form-label" for="channel-group">Группа</label>
                         <select class="form-select" id="channel-group" required>
-                            <option value="">Select group...</option>
+                            <option value="">Выберите группу...</option>
                             <!-- Groups will be populated via JavaScript -->
                         </select>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label">Allowed Entity Types</label>
+                        <label class="form-label">Доступные типы сущностей</label>
                         <div class="checkbox-list" id="channel-entity-types-list">
                             <!-- Entity types will be populated via JavaScript -->
                         </div>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label">Users</label>
+                        <label class="form-label">Пользователи</label>
                         <div class="checkbox-list" id="channel-users-list">
                             <!-- Users grouped by departments will be populated via JavaScript -->
                         </div>
                     </div>
 
                     <div class="modal-footer">
-                        <button type="button" class="cancel-btn" id="cancel-create-channel">Cancel</button>
-                        <button type="submit" class="create-btn">Create Channel</button>
+                        <button type="button" class="cancel-btn" id="cancel-create-channel">Отменить</button>
+                        <button type="submit" class="create-btn">Создать канал</button>
                     </div>
                 </form>
             </div>
         </div>
 
-        <!-- Дровер для детальной информации о пользователе -->
         <div class="drawer-overlay" id="user-detail-drawer-overlay">
             <div class="drawer" id="user-detail-drawer">
                 <div class="drawer-header">
-                    <div class="drawer-title">User Details</div>
+                    <div class="drawer-title">Информация о пользователе</div>
                     <button class="close-drawer" id="close-user-drawer">&times;</button>
                 </div>
-                <div class="drawer-content" id="user-detail-content">
-                    <!-- Содержимое будет загружено через JavaScript -->
-                </div>
+                <div class="drawer-content" id="user-detail-content"></div>
                 <div class="drawer-actions">
-                    <button class="admin-btn" id="edit-user-btn">Edit User</button>
+                    <button class="admin-btn" id="edit-user-btn">Редактировать пользователя</button>
                 </div>
             </div>
         </div>
 
-        <!-- Дровер для детальной информации о канале -->
         <div class="drawer-overlay" id="channel-detail-drawer-overlay">
             <div class="drawer" id="channel-detail-drawer">
                 <div class="drawer-header">
-                    <div class="drawer-title">Channel Details</div>
+                    <div class="drawer-title">Информация о канале</div>
                     <button class="close-drawer" id="close-channel-drawer">&times;</button>
                 </div>
-                <div class="drawer-content" id="channel-detail-content">
-                    <!-- Содержимое будет загружено через JavaScript -->
-                </div>
+                <div class="drawer-content" id="channel-detail-content"></div>
                 <div class="drawer-actions">
-                    <button class="admin-btn delete" id="delete-channel-btn">Delete Channel</button>
+                    <button class="admin-btn delete" id="delete-channel-btn">Удалить канал</button>
                 </div>
             </div>
         </div>
 
         <script>
-            // Сохраняем данные для использования в JavaScript
             const adminData = {{
                 userId: {user_id_escaped},
                 userDisplayName: {user_display_name_escaped}
             }};
 
-            // Переменные для состояния
             let allUsersData = {{}};
             let allChannelsData = {{}};
             let allDepartments = [];
@@ -876,7 +866,6 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
             let currentUserDetail = null;
             let currentChannelDetail = null;
 
-            // Функция загрузки навигации (аналогичная chat_channel_view.py)
             async function loadNavigation() {{
                 try {{
                     const [userInfoRes, channelsRes, chatsRes] = await Promise.all([
@@ -898,16 +887,13 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
 
                     let html = '';
 
-                    // Admin button - active
-                    html += '<div id="admin-btn" class="nav-item active">Admin Panel</div>';
+                    html += '<div id="admin-btn" class="nav-item active">Панель администратора</div>';
 
-                    // Profile section
-                    html += '<div id="profile-btn" onclick="openProfile()" class="nav-item">Profile</div>';
-                    html += '<div id="notes-btn" class="nav-item">Notes</div>';
-                    html += '<div id="task-explorer" onclick="openTaskExplorer()" class="nav-item">Task Explorer</div>';
+                    html += '<div id="profile-btn" onclick="openProfile()" class="nav-item">Профиль</div>';
+                    html += '<div id="notes-btn" class="nav-item">Заметки</div>';
+                    html += '<div id="task-explorer" onclick="openTaskExplorer()" class="nav-item">Обозреватель задач</div>';
 
-                    // Chats section
-                    html += '<div id="chats-toggle" class="nav-item">Chats ▼</div>';
+                    html += '<div id="chats-toggle" class="nav-item">Чаты ▼</div>';
                     html += '<div id="chats-submenu" class="submenu">';
 
                     for (const dept in chats) {{
@@ -924,8 +910,7 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
 
                     html += '</div>';
 
-                    // Channels section
-                    html += '<div id="channels-toggle" class="nav-item">Channels ▼</div>';
+                    html += '<div id="channels-toggle" class="nav-item">Каналы ▼</div>';
                     html += '<div id="channels-submenu" class="submenu">';
 
                     for (const group in channels) {{
@@ -942,12 +927,10 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
 
                     html += '</div>';
 
-                    // Logout
-                    html += '<div id="logout-btn" class="nav-item" onclick="logout()">Logout</div>';
+                    html += '<div id="logout-btn" class="nav-item" onclick="logout()">Выйти</div>';
 
                     sidebar.innerHTML = html;
 
-                    // Добавляем обработчики событий для toggle-меню
                     setupNavigationEvents();
 
                 }} catch (error) {{
@@ -955,9 +938,7 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                 }}
             }}
 
-            // Настройка событий навигации
             function setupNavigationEvents() {{
-                // Toggle для Chats
                 const chatsToggle = document.getElementById('chats-toggle');
                 const chatsSubmenu = document.getElementById('chats-submenu');
                 if (chatsToggle && chatsSubmenu) {{
@@ -967,7 +948,6 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                     chatsSubmenu.style.display = 'flex';
                 }}
 
-                // Toggle для Channels
                 const channelsToggle = document.getElementById('channels-toggle');
                 const channelsSubmenu = document.getElementById('channels-submenu');
                 if (channelsToggle && channelsSubmenu) {{
@@ -977,7 +957,6 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                     channelsSubmenu.style.display = 'flex';
                 }}
                 
-                // Notes button
                 const notesBtn = document.getElementById('notes-btn');
                 if (notesBtn) {{
                     notesBtn.addEventListener('click', async () => {{
@@ -996,7 +975,6 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                 }}
             }}
 
-            // Функции перехода
             function openProfile() {{
                 window.location.href = '/profile/';
             }}
@@ -1013,19 +991,15 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                 window.location.href = '/channel/' + channelId + '/';
             }}
 
-            // Функция выхода
             function logout() {{
-                // Создаем невидимую форму
                 const form = document.createElement('form');
                 form.method = 'POST';
                 form.action = '/logout';
                                 
-                // Добавляем форму в документ и отправляем
                 document.body.appendChild(form);
                 form.submit();
             }}
 
-            // Загрузка данных для админ-панели
             async function loadAdminData() {{
                 try {{
                     const [usersRes, channelsRes, deptsRes, groupsRes, entityTypesRes] = await Promise.all([
@@ -1063,7 +1037,6 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                 }}
             }}
 
-            // Отображение списка пользователей
             function renderUsersList() {{
                 const content = document.getElementById('users-content');
                 if (!content || !allUsersData) return;
@@ -1085,8 +1058,8 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                         html += '<div class="item-meta">' + (user.created_at ? new Date(user.created_at).toLocaleDateString() : '') + '</div>';
                         html += '</div>';
                         html += '<div class="item-details">';
-                        html += 'Login: ' + escapeHtml(user.login) + ' | ';
-                        html += 'Channels: ' + user.channel_count;
+                        html += 'Логин: ' + escapeHtml(user.login) + ' | ';
+                        html += 'Каналов: ' + user.channel_count;
                         html += '</div>';
                         html += '</div>';
                     }});
@@ -1101,7 +1074,6 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                 content.innerHTML = html;
             }}
 
-            // Отображение списка каналов
             function renderChannelsList() {{
                 const content = document.getElementById('channels-content');
                 if (!content || !allChannelsData) return;
@@ -1119,9 +1091,9 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                         html += '<div class="item-meta">' + (channel.created_at ? new Date(channel.created_at).toLocaleDateString() : '') + '</div>';
                         html += '</div>';
                         html += '<div class="item-details">';
-                        html += 'Entity types: ' + (channel.allowed_entity_types.length > 0 ? 
+                        html += 'Типы сущностей: ' + (channel.allowed_entity_types.length > 0 ? 
                             channel.allowed_entity_types.join(', ') : 'All') + ' | ';
-                        html += 'Users: ' + channel.user_count;
+                        html += 'Пользователей: ' + channel.user_count;
                         html += '</div>';
                         html += '</div>';
                     }});
@@ -1136,10 +1108,8 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                 content.innerHTML = html;
             }}
 
-            // Открытие детальной информации о пользователе
             async function openUserDetail(userId) {{
                 try {{
-                    // Закрываем дровер канала, если он открыт
                     document.getElementById('channel-detail-drawer-overlay').style.display = 'none';
 
                     const response = await fetch('/api/admin/users/' + userId);
@@ -1151,32 +1121,31 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                     let html = '';
 
                     html += '<div class="drawer-section">';
-                    html += '<div class="drawer-section-title">Basic Information</div>';
+                    html += '<div class="drawer-section-title">Общая информация</div>';
                     html += '<div class="drawer-item">';
-                    html += '<strong>Login:</strong> ' + escapeHtml(currentUserDetail.login);
+                    html += '<strong>Логин:</strong> ' + escapeHtml(currentUserDetail.login);
                     html += '</div>';
                     html += '<div class="drawer-item">';
-                    html += '<strong>Display Name:</strong> ' + escapeHtml(currentUserDetail.display_name);
+                    html += '<strong>Отображаемое имя:</strong> ' + escapeHtml(currentUserDetail.display_name);
                     html += '</div>';
                     html += '<div class="drawer-item">';
-                    html += '<strong>Department:</strong> ' + 
+                    html += '<strong>Отдел:</strong> ' + 
                         (currentUserDetail.department ? 
                             escapeHtml(currentUserDetail.department.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase())) : 
                             'None');
                     html += '</div>';
                     html += '<div class="drawer-item">';
-                    html += '<strong>Admin:</strong> ' + (currentUserDetail.is_admin ? 'Yes' : 'No');
+                    html += '<strong>Является ли администратором:</strong> ' + (currentUserDetail.is_admin ? 'Да' : 'Нет');
                     html += '</div>';
                     html += '<div class="drawer-item">';
-                    html += '<strong>Created:</strong> ' + (currentUserDetail.created_at ? 
+                    html += '<strong>Создан:</strong> ' + (currentUserDetail.created_at ? 
                         new Date(currentUserDetail.created_at).toLocaleString() : 'Unknown');
                     html += '</div>';
                     html += '</div>';
 
-                    // Каналы по группам
                     if (currentUserDetail.channels_by_group && Object.keys(currentUserDetail.channels_by_group).length > 0) {{
                         html += '<div class="drawer-section">';
-                        html += '<div class="drawer-section-title">Channels</div>';
+                        html += '<div class="drawer-section-title">Каналы</div>';
 
                         for (const [groupName, channels] of Object.entries(currentUserDetail.channels_by_group)) {{
                             html += '<div style="margin-bottom: 10px;">';
@@ -1195,14 +1164,13 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                         html += '</div>';
                     }} else {{
                         html += '<div class="drawer-section">';
-                        html += '<div class="drawer-section-title">Channels</div>';
+                        html += '<div class="drawer-section-title">Каналы</div>';
                         html += '<div class="drawer-item">No channels</div>';
                         html += '</div>';
                     }}
 
                     content.innerHTML = html;
 
-                    // Показываем дровер
                     document.getElementById('user-detail-drawer-overlay').style.display = 'block';
 
                 }} catch (error) {{
@@ -1211,10 +1179,8 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                 }}
             }}
 
-            // Открытие детальной информации о канале
             async function openChannelDetail(channelId) {{
                 try {{
-                    // Закрываем дровер пользователя, если он открыт
                     document.getElementById('user-detail-drawer-overlay').style.display = 'none';
 
                     const response = await fetch('/api/admin/channels/' + channelId);
@@ -1226,31 +1192,30 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                     let html = '';
 
                     html += '<div class="drawer-section">';
-                    html += '<div class="drawer-section-title">Basic Information</div>';
+                    html += '<div class="drawer-section-title">Общая информация</div>';
                     html += '<div class="drawer-item">';
-                    html += '<strong>Name:</strong> ' + escapeHtml(currentChannelDetail.name);
+                    html += '<strong>Наименование:</strong> ' + escapeHtml(currentChannelDetail.name);
                     html += '</div>';
                     html += '<div class="drawer-item">';
-                    html += '<strong>Group:</strong> ' + 
+                    html += '<strong>Группа:</strong> ' + 
                         (currentChannelDetail.group ? 
                             escapeHtml(currentChannelDetail.group.replace(/_/g, ' ').replace(/\\b\\w/g, l => l.toUpperCase())) : 
                             'None');
                     html += '</div>';
                     html += '<div class="drawer-item">';
-                    html += '<strong>Allowed Entity Types:</strong> ' + 
+                    html += '<strong>Доступные типы сущностей:</strong> ' + 
                         (currentChannelDetail.allowed_entity_types.length > 0 ? 
                          currentChannelDetail.allowed_entity_types.join(', ') : 'All');
                     html += '</div>';
                     html += '<div class="drawer-item">';
-                    html += '<strong>Created:</strong> ' + (currentChannelDetail.created_at ? 
+                    html += '<strong>Создан:</strong> ' + (currentChannelDetail.created_at ? 
                         new Date(currentChannelDetail.created_at).toLocaleString() : 'Unknown');
                     html += '</div>';
                     html += '</div>';
 
-                    // Пользователи по департаментам
                     if (currentChannelDetail.users_by_dept && Object.keys(currentChannelDetail.users_by_dept).length > 0) {{
                         html += '<div class="drawer-section">';
-                        html += '<div class="drawer-section-title">Users (' + 
+                        html += '<div class="drawer-section-title">Пользователи (' + 
                             Object.values(currentChannelDetail.users_by_dept).flat().length + ')</div>';
 
                         for (const [deptName, users] of Object.entries(currentChannelDetail.users_by_dept)) {{
@@ -1260,7 +1225,6 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                                 ' (' + users.length + ')</div>';
 
                             users.forEach(user => {{
-                                // Убрали onclick для пользователей в дровере канала
                                 html += '<div class="drawer-item" style="margin-left: 10px;">';
                                 html += escapeHtml(user.display_name) + ' (' + escapeHtml(user.login) + ')';
                                 html += '</div>';
@@ -1272,14 +1236,13 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                         html += '</div>';
                     }} else {{
                         html += '<div class="drawer-section">';
-                        html += '<div class="drawer-section-title">Users</div>';
-                        html += '<div class="drawer-item">No users</div>';
+                        html += '<div class="drawer-section-title">Пользователи</div>';
+                        html += '<div class="drawer-item">Нет пользователей</div>';
                         html += '</div>';
                     }}
 
                     content.innerHTML = html;
 
-                    // Показываем дровер
                     document.getElementById('channel-detail-drawer-overlay').style.display = 'block';
 
                 }} catch (error) {{
@@ -1288,7 +1251,6 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                 }}
             }}
 
-            // Переключение секций
             function toggleSection(section) {{
                 const content = document.getElementById(section + '-content');
                 const toggle = document.querySelector('#' + section + '-section .section-toggle');
@@ -1302,36 +1264,30 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                 }}
             }}
 
-            // Настройка модальных окон
             function setupModals() {{
-                // Модальное окно создания пользователя
                 const createUserModal = document.getElementById('create-user-modal-overlay');
                 const closeCreateUserModal = document.getElementById('close-create-user-modal');
                 const cancelCreateUser = document.getElementById('cancel-create-user');
                 const addUserBtn = document.getElementById('add-user-btn');
                 const createUserForm = document.getElementById('create-user-form');
                 
-                // Функция для показа уведомлений в модальном окне создания пользователя
                 function showCreateUserAlert(message, type) {{
                     const modalAlert = document.getElementById('create-user-alert-message');
                     modalAlert.textContent = message;
                     modalAlert.className = 'alert alert-' + type + ' modal-alert';
                     modalAlert.style.display = 'block';
                     
-                    // Автоматически скрыть через 5 секунд
                     setTimeout(() => {{
                         modalAlert.style.display = 'none';
                     }}, 5000);
                 }}
                 
-                // Функция для показа уведомлений в модальном окне редактирования пользователя
                 function showEditUserAlert(message, type) {{
                     const modalAlert = document.getElementById('edit-user-alert-message');
                     modalAlert.textContent = message;
                     modalAlert.className = 'alert alert-' + type + ' modal-alert';
                     modalAlert.style.display = 'block';
                     
-                    // Автоматически скрыть через 5 секунд
                     setTimeout(() => {{
                         modalAlert.style.display = 'none';
                     }}, 5000);
@@ -1346,9 +1302,8 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
 
                     addUserBtn.addEventListener('click', async () => {{
                         document.getElementById('create-user-alert-message').style.display = 'none';
-                        // Заполняем департаменты
                         const deptSelect = document.getElementById('user-department');
-                        deptSelect.innerHTML = '<option value="">Select department...</option>';
+                        deptSelect.innerHTML = '<option value="">Выберите подразделение...</option>';
                         allDepartments.forEach(dept => {{
                             const option = document.createElement('option');
                             option.value = dept.id;
@@ -1356,7 +1311,6 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                             deptSelect.appendChild(option);
                         }});
 
-                        // Заполняем каналы
                         const channelsList = document.getElementById('user-channels-list');
                         channelsList.innerHTML = '';
 
@@ -1403,23 +1357,21 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                             channel_ids: []
                         }};
 
-                        // Получаем выбранные каналы
                         const channelCheckboxes = document.querySelectorAll('#user-channels-list input[type="checkbox"]:checked');
                         channelCheckboxes.forEach(cb => {{
                             formData.channel_ids.push(cb.value);
                         }});
 
-                        // Проверка пароля
                         const password = document.getElementById('user-password').value;
                         const passwordConfirm = document.getElementById('user-password-confirm').value;
 
                         if (password.length < 6) {{
-                            showCreateUserAlert('Password must be at least 6 characters long', 'error');
+                            showCreateUserAlert('Пароль должен содержать как минимум 6 символов', 'error');
                             return;
                         }}
 
                         if (password !== passwordConfirm) {{
-                            showCreateUserAlert('Passwords do not match', 'error');
+                            showCreateUserAlert('Пароли не совпадают', 'error');
                             return;
                         }}
 
@@ -1434,7 +1386,7 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
 
                             if (response.ok) {{
                                 closeCreateUserModalFunc();
-                                await loadAdminData(); // Обновляем список
+                                await loadAdminData();
                                 await refreshNavigation();
                             }} else {{
                                 const error = await response.json();
@@ -1447,7 +1399,6 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                     }});
                 }}
 
-                // Модальное окно редактирования пользователя
                 const editUserModal = document.getElementById('edit-user-modal-overlay');
                 const closeEditUserModal = document.getElementById('close-edit-user-modal');
                 const cancelEditUser = document.getElementById('cancel-edit-user');
@@ -1466,14 +1417,12 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                         
                         document.getElementById('edit-user-alert-message').style.display = 'none';
 
-                        // Заполняем форму данными пользователя
                         document.getElementById('edit-user-id').value = currentUserDetail.id;
                         document.getElementById('edit-user-login').value = currentUserDetail.login;
                         document.getElementById('edit-user-display-name').value = currentUserDetail.display_name;
 
-                        // Заполняем департаменты
                         const deptSelect = document.getElementById('edit-user-department');
-                        deptSelect.innerHTML = '<option value="">Select department...</option>';
+                        deptSelect.innerHTML = '<option value="">Выберите подразделение...</option>';
                         allDepartments.forEach(dept => {{
                             const option = document.createElement('option');
                             option.value = dept.id;
@@ -1484,14 +1433,11 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                             deptSelect.appendChild(option);
                         }});
 
-                        // Чекбокс администратора
                         document.getElementById('edit-user-is-admin').checked = currentUserDetail.is_admin;
 
-                        // Заполняем каналы
                         const channelsList = document.getElementById('edit-user-channels-list');
                         channelsList.innerHTML = '';
 
-                        // Получаем ID каналов пользователя
                         const userChannelIds = [];
                         if (currentUserDetail.channels_by_group) {{
                             for (const channels of Object.values(currentUserDetail.channels_by_group)) {{
@@ -1545,24 +1491,22 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                             channel_ids: []
                         }};
 
-                        // Получаем выбранные каналы
                         const channelCheckboxes = document.querySelectorAll('#edit-user-channels-list input[type="checkbox"]:checked');
                         channelCheckboxes.forEach(cb => {{
                             formData.channel_ids.push(cb.value);
                         }});
 
-                        // Проверка пароля, если он указан
                         const password = document.getElementById('edit-user-password').value;
                         const passwordConfirm = document.getElementById('edit-user-password-confirm').value;
 
                         if (password) {{
                             if (password.length < 6) {{
-                                showEditUserAlert('Password must be at least 6 characters long', 'error');
+                                showEditUserAlert('Пароль должен содержать как минимум 6 символов', 'error');
                                 return;
                             }}
 
                             if (password !== passwordConfirm) {{
-                                showEditUserAlert('Passwords do not match', 'error');
+                                showEditUserAlert('Пароли не совпадают', 'error');
                                 return;
                             }}
 
@@ -1580,9 +1524,8 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
 
                             if (response.ok) {{
                                 closeEditUserModalFunc();
-                                await loadAdminData(); // Обновляем список
+                                await loadAdminData();
                                 await refreshNavigation();
-                                // Закрываем дровер и открываем заново для обновления данных
                                 document.getElementById('user-detail-drawer-overlay').style.display = 'none';
                                 await openUserDetail(userId);
                             }} else {{
@@ -1596,7 +1539,6 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                     }});
                 }}
 
-                // Модальное окно создания канала
                 const createChannelModal = document.getElementById('create-channel-modal-overlay');
                 const closeCreateChannelModal = document.getElementById('close-create-channel-modal');
                 const cancelCreateChannel = document.getElementById('cancel-create-channel');
@@ -1610,9 +1552,8 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                     }}
 
                     addChannelBtn.addEventListener('click', async () => {{
-                        // Заполняем группы
                         const groupSelect = document.getElementById('channel-group');
-                        groupSelect.innerHTML = '<option value="">Select group...</option>';
+                        groupSelect.innerHTML = '<option value="">Выберите группу...</option>';
                         allChannelGroups.forEach(group => {{
                             const option = document.createElement('option');
                             option.value = group.id;
@@ -1620,14 +1561,12 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                             groupSelect.appendChild(option);
                         }});
 
-                        // Заполняем типы сущностей
                         const entityTypesList = document.getElementById('channel-entity-types-list');
                         entityTypesList.innerHTML = '';
 
-                        // Создаем группу для всех типов сущностей
                         const entityTypesGroup = document.createElement('div');
                         entityTypesGroup.className = 'checkbox-group';
-                        entityTypesGroup.innerHTML = '<div class="checkbox-group-title">Entity Types</div>';
+                        entityTypesGroup.innerHTML = '<div class="checkbox-group-title">Выберите нужные типы</div>';
 
                         if (allEntityTypes.length > 0) {{
                             allEntityTypes.forEach(entityType => {{
@@ -1643,7 +1582,6 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
 
                         entityTypesList.appendChild(entityTypesGroup);
 
-                        // Заполняем пользователей
                         const usersList = document.getElementById('channel-users-list');
                         usersList.innerHTML = '';
 
@@ -1688,13 +1626,11 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                             user_ids: []
                         }};
 
-                        // Получаем выбранные типы сущностей
                         const entityTypeCheckboxes = document.querySelectorAll('#channel-entity-types-list input[type="checkbox"]:checked');
                         entityTypeCheckboxes.forEach(cb => {{
                             formData.allowed_entity_types.push(cb.value);
                         }});
 
-                        // Получаем выбранных пользователей
                         const userCheckboxes = document.querySelectorAll('#channel-users-list input[type="checkbox"]:checked');
                         userCheckboxes.forEach(cb => {{
                             formData.user_ids.push(cb.value);
@@ -1711,7 +1647,7 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
 
                             if (response.ok) {{
                                 closeCreateChannelModalFunc();
-                                await loadAdminData(); // Обновляем список
+                                await loadAdminData();
                                 await refreshNavigation();
                             }} else {{
                                 const error = await response.json();
@@ -1725,9 +1661,7 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                 }}
             }}
 
-            // Настройка дроверов
             function setupDrawers() {{
-                // Дровер пользователя
                 const userDrawerOverlay = document.getElementById('user-detail-drawer-overlay');
                 const closeUserDrawer = document.getElementById('close-user-drawer');
 
@@ -1743,7 +1677,6 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                     }});
                 }}
 
-                // Дровер канала
                 const channelDrawerOverlay = document.getElementById('channel-detail-drawer-overlay');
                 const closeChannelDrawer = document.getElementById('close-channel-drawer');
                 const deleteChannelBtn = document.getElementById('delete-channel-btn');
@@ -1760,7 +1693,7 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                     }});
 
                     deleteChannelBtn.addEventListener('click', async () => {{
-                        if (!currentChannelDetail || !confirm('Are you sure you want to delete this channel? This will also delete all topics, entities, and comments in this channel.')) {{
+                        if (!currentChannelDetail || !confirm('Вы уверены, что хотите удалить выбранный канал? Это безвозвратно удалит всё содержимое канала.')) {{
                             return;
                         }}
 
@@ -1771,7 +1704,7 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
 
                             if (response.ok) {{
                                 channelDrawerOverlay.style.display = 'none';
-                                await loadAdminData(); // Обновляем список
+                                await loadAdminData();
                                 await refreshNavigation();
                             }} else {{
                                 const error = await response.json();
@@ -1793,14 +1726,12 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                 }}
             }}
 
-            // Вспомогательная функция для экранирования HTML
             function escapeHtml(text) {{
                 const div = document.createElement('div');
                 div.textContent = text;
                 return div.innerHTML;
             }}
 
-            // Инициализация при загрузке страницы
             document.addEventListener('DOMContentLoaded', () => {{
                 try {{
                     loadNavigation();
@@ -1808,13 +1739,12 @@ def generate_admin_panel_html(user: User) -> HTMLResponse:
                     setupModals();
                     setupDrawers();
 
-                    // Разворачиваем секции по умолчанию
                     setTimeout(() => {{
                         toggleSection('users');
                         toggleSection('channels');
                     }}, 100);
                 }} catch (error) {{
-                    console.error('Error initializing admin panel:', error);
+                    console.error('Error initializing Панель администратора:', error);
                 }}
             }});
         </script>
@@ -1877,7 +1807,6 @@ async def get_admin_channel_detail(
 async def create_user(user_data: dict, user_login=Depends(require_admin), session: AsyncSession = Depends(get_session)):
     """Создание нового пользователя"""
     try:
-        # Проверяем, существует ли пользователь с таким логином
         existing_user_query = select(User).where(User.login == user_data['login'])
         existing_user_result = await session.execute(existing_user_query)
         existing_user = existing_user_result.scalar_one_or_none()
@@ -1885,13 +1814,11 @@ async def create_user(user_data: dict, user_login=Depends(require_admin), sessio
         if existing_user:
             raise HTTPException(status_code=400, detail='User with this login already exists')
 
-        # Валидируем department
         try:
             department_enum = DepartmentEnum(user_data['department'])
         except ValueError:
             raise HTTPException(status_code=400, detail='Invalid department value')
 
-        # Создаем пользователя
         user_dict = {
             'login': user_data['login'],
             'display_name': user_data['display_name'],
@@ -1905,13 +1832,11 @@ async def create_user(user_data: dict, user_login=Depends(require_admin), sessio
 
         user_id = result.inserted_primary_key[0]
 
-        # Добавляем пользователя в выбранные каналы
         channel_ids = user_data.get('channel_ids', [])
         if channel_ids:
             for channel_id in channel_ids:
                 await session.execute(insert(user_channels).values(user_id=user_id, channel_id=channel_id))
 
-        # Создаем чаты для нового пользователя
         await create_direct_chats_for_new_user(session, user_id)
 
         await session.commit()
@@ -1929,7 +1854,6 @@ async def create_direct_chats_for_new_user(session: AsyncSession, new_user_id: A
     1. Self-чат с самим собой
     2. Чаты со всеми существующими пользователями
     """
-    # Получаем нового пользователя
     new_user_query = select(User).where(User.id == new_user_id)
     new_user_result = await session.execute(new_user_query)
     new_user = new_user_result.scalar_one_or_none()
@@ -1937,13 +1861,10 @@ async def create_direct_chats_for_new_user(session: AsyncSession, new_user_id: A
     if not new_user:
         return
 
-    # Получаем всех существующих пользователей (кроме нового)
     existing_users_query = select(User).where(User.id != new_user_id)
     existing_users_result = await session.execute(existing_users_query)
     existing_users = list(existing_users_result.scalars().all())
 
-    # 1. Создаем self-чат для нового пользователя
-    # Проверяем, нет ли уже self-чата
     existing_self_chat_query = select(DirectChat).where(
         DirectChat.is_self_chat == True, DirectChat.users.any(User.id == new_user_id)
     )
@@ -1956,8 +1877,6 @@ async def create_direct_chats_for_new_user(session: AsyncSession, new_user_id: A
         session.add(new_self_chat)
         await session.flush()
 
-    # 2. Создаем чаты со всеми существующими пользователями
-    # Получаем все существующие чаты, в которых участвует новый пользователь
     existing_chats_query = (
         select(DirectChat)
         .where(DirectChat.is_self_chat == False, DirectChat.users.any(User.id == new_user_id))
@@ -1967,16 +1886,13 @@ async def create_direct_chats_for_new_user(session: AsyncSession, new_user_id: A
     existing_chats_result = await session.execute(existing_chats_query)
     existing_chats = list(existing_chats_result.scalars().all())
 
-    # Создаем множество пар пользователей, у которых уже есть чат
     existing_pairs = set()
     for chat in existing_chats:
         if len(chat.users) == 2:
             user_ids = sorted([user.id for user in chat.users])
             existing_pairs.add(tuple(user_ids))
 
-    # Создаем недостающие чаты
     for existing_user in existing_users:
-        # Сортируем ID для уникальности пары
         user_ids = sorted([new_user_id, existing_user.id])
         pair_key = tuple(user_ids)
 
@@ -1994,7 +1910,6 @@ async def update_user(
 ):
     """Обновление пользователя"""
     try:
-        # Проверяем существование пользователя
         user_query = select(User).where(User.id == user_id)
         user_result = await session.execute(user_query)
         user = user_result.scalar_one_or_none()
@@ -2002,7 +1917,6 @@ async def update_user(
         if not user:
             raise HTTPException(status_code=404, detail='User not found')
 
-        # Обновляем базовые данные
         update_data = {}
 
         if 'login' in user_data:
@@ -2020,19 +1934,15 @@ async def update_user(
         if 'is_admin' in user_data:
             update_data['is_admin'] = user_data['is_admin']
 
-        # Обновляем пароль, если он указан
         if 'password' in user_data and user_data['password']:
             update_data['password_hash'] = hash_password(user_data['password'])
 
         if update_data:
             await session.execute(update(User).where(User.id == user_id).values(**update_data))
 
-        # Обновляем каналы пользователя
         if 'channel_ids' in user_data:
-            # Удаляем все текущие связи
             await session.execute(delete(user_channels).where(user_channels.c.user_id == user_id))
 
-            # Добавляем новые связи
             channel_ids = user_data['channel_ids']
             if channel_ids:
                 for channel_id in channel_ids:
@@ -2053,13 +1963,11 @@ async def create_channel(
 ):
     """Создание нового канала"""
     try:
-        # Валидируем group
         try:
             group_enum = ChannelGroupEnum(channel_data['group'])
         except ValueError:
             raise HTTPException(status_code=400, detail='Invalid channel group value')
 
-        # Валидируем allowed_entity_types
         allowed_entity_types = channel_data.get('allowed_entity_types', [])
         for entity_type in allowed_entity_types:
             try:
@@ -2067,7 +1975,6 @@ async def create_channel(
             except ValueError:
                 raise HTTPException(status_code=400, detail=f'Invalid entity type: {entity_type}')
 
-        # Создаем канал
         channel_dict = {'name': channel_data['name'], 'group': group_enum, 'allowed_entity_types': allowed_entity_types}
 
         result = await session.execute(insert(Channel).values(**channel_dict))
@@ -2075,7 +1982,6 @@ async def create_channel(
 
         channel_id = result.inserted_primary_key[0]
 
-        # Добавляем пользователей в канал
         user_ids = channel_data.get('user_ids', [])
         if user_ids:
             for user_id in user_ids:

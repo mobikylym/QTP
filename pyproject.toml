@@ -6,14 +6,14 @@ requires-python = "==3.13.7"
 dependencies = [
     "fastapi==0.121.3",
     "nox==2025.11.12",
-    "uvicorn[standard]",
+    "uvicorn[standard]==0.38.0",
     "pydantic==2.12.4",
-    "pydantic-settings",
+    "pydantic-settings==2.12.0",
     "sqlalchemy[asyncio]==2.0.44",
     "asyncpg==0.30.0",
-    "alembic",
-    "python-multipart",
-    "structlog",
+    "alembic==1.17.2",
+    "python-multipart==0.0.20",
+    "structlog==25.5.0",
     "passlib==1.7.4",
     "bcrypt==4.0.1",
     "pyjwt==2.10.1",
@@ -21,7 +21,6 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    # Инструменты разработки — линтеры, тесты, запуск, типы для dev-зависимостей, а также библиотеки для генератора API
     "mypy==1.18.2",
     "mypy-extensions==1.1.0",
     "ruff==0.14.6",
@@ -35,7 +34,6 @@ dev = [
 DEP001 = [
     "src",
 ]
-# Не ругаться на то, что pytest и другие зависимости не используются как модули
 DEP002 = [
     "nox",
     "uvicorn",
@@ -71,8 +69,7 @@ extend-select = [
     "I", "N", "B", "UP", "ERA", "F", "SIM", "D",
     "A", "BLE001", "C901", "S", "SLF001", "T", "W", "ASYNC", "PLE", "PIE"
 ]
-# TODO: настроить логгер и исключить T201 из этого списка, заменив все принты.
-ignore = ["N815", "D100", "D104", "D203", "D212", "D400", "D415", "S101", "S311", "T201", "D101", "D102", "D103"]
+ignore = ["N815", "D100", "D104", "D203", "D212", "D400", "D415", "S101", "S311", "T201", "D101", "D102", "D103", "W293", "W291", "S603", "S607", "B008"]
 
 [tool.ruff.lint.per-file-ignores]
 

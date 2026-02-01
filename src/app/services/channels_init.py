@@ -189,10 +189,8 @@ async def ensure_default_channels(session: AsyncSession):
     for group, cfg in DEFAULT_CHANNELS.items():
         for ch_name, allowed_types in cfg['channels'].items():
             if ch_name in existing_channels:
-                # Полностью пропускаем существующие каналы
                 continue
 
-            # Создаем новый канал
             new_ch = Channel(
                 name=ch_name,
                 group=group,
@@ -204,7 +202,6 @@ async def ensure_default_channels(session: AsyncSession):
     if created_channels:
         await session.flush()
 
-    # Добавляем пользователей только в НОВЫЕ каналы
     for channel, group, allowed_deps in created_channels:
         for dep in allowed_deps:
             for user in users_by_department.get(dep, []):
@@ -212,3 +209,5 @@ async def ensure_default_channels(session: AsyncSession):
                 await session.execute(stmt)
 
     await session.commit()
+
+    print('Default channels check completed!')

@@ -1,12 +1,12 @@
 import json
 import re
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, Query
+from fastapi import Depends, Query
 from fastapi.responses import HTMLResponse, JSONResponse
-from sqlalchemy import and_, or_, select, func, case
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -16,95 +16,73 @@ from src.app.api.http.router import router
 from src.app.storage.models import (
     Acknowledge,
     ActionPointEntity,
-    Channel,
+    ActionPointStatus,
     DefectEntity,
+    DefectStatus,
     DirectChat,
     Entity,
     EntityTypeEnum,
     InfoEntity,
     InfoRequiredUser,
-    ProposalEntity,
-    QuestionEntity,
-    TaskEntity,
-    Topic,
-    User,
-    DepartmentEnum,
-    QuestionStatus,
-    DefectStatus,
-    TaskStatus,
     ProposalStatus,
-    ActionPointStatus,
+    QuestionStatus,
+    TaskEntity,
+    TaskStatus,
+    User,
 )
 
 
 def parse_datetime(dt_str: str) -> datetime:
     """Парсит строку datetime в объект datetime."""
     try:
-        # Пробуем стандартный ISO формат
         return datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
     except ValueError:
-        # Если не сработало, пробуем удалить микросекунды или обработать другие форматы
-        # Удаляем микросекунды если есть
         if '.' in dt_str:
             dt_str = dt_str.split('.')[0]
-        # Добавляем Z если нужно
         if dt_str.endswith('Z'):
             dt_str = dt_str[:-1] + '+00:00'
-        # Если нет информации о временной зоне, добавляем UTC
         if not re.search(r'[+-]\d{2}:?\d{2}$', dt_str):
             dt_str += '+00:00'
         return datetime.fromisoformat(dt_str)
 
 
 @router.get('/task-explorer/', response_class=HTMLResponse)
-async def task_explorer_page(
-        user_login=Depends(require_auth),
-        session: AsyncSession = Depends(get_session)
-):
-    """Страница Task Explorer с тремя вкладками"""
-    # Получаем текущего пользователя
+async def task_explorer_page(user_login=Depends(require_auth), session: AsyncSession = Depends(get_session)):
+    """Страница Обозреватель задач с тремя вкладками"""
     user_query = select(User).where(User.login == user_login)
     user_result = await session.execute(user_query)
     user = user_result.scalar_one()
 
-    # Генерируем HTML страницу
     return generate_task_explorer_html(user)
 
 
 @router.get('/api/entities-filter', response_class=JSONResponse)
 async def filter_entities(
-        # Фильтры
-        entity_types: Optional[List[str]] = Query(None, description="Типы entity (мультиселект)"),
-        channel_ids: Optional[List[str]] = Query(None, description="ID каналов (мультиселект)"),
-        chat_ids: Optional[List[str]] = Query(None, description="ID чатов (мультиселект)"),
-        author_id: Optional[str] = Query(None, description="ID автора (одиночный выбор)"),
-        statuses: Optional[List[str]] = Query(None, description="Статусы (мультиселект)"),
-        deadline_from: Optional[datetime] = Query(None, description="Дедлайн от"),
-        deadline_to: Optional[datetime] = Query(None, description="Дедлайн до"),
-        executor_id: Optional[str] = Query(None, description="ID исполнителя (одиночный выбор)"),
-        qa_id: Optional[str] = Query(None, description="ID QA (одиночный выбор)"),
-        created_from: Optional[datetime] = Query(None, description="Создано от"),
-        created_to: Optional[datetime] = Query(None, description="Создано до"),
-
-        # Параметры для специальных вкладок
-        tab: Optional[str] = Query(None, description="Вкладка: my_tasks, outdated, all_filters"),
-
-        user_login=Depends(require_auth),
-        session: AsyncSession = Depends(get_session)
+    entity_types: list[str] | None = Query(None, description='Типы entity (мультиселект)'),
+    channel_ids: list[str] | None = Query(None, description='ID каналов (мультиселект)'),
+    chat_ids: list[str] | None = Query(None, description='ID чатов (мультиселект)'),
+    author_id: str | None = Query(None, description='ID автора (одиночный выбор)'),
+    statuses: list[str] | None = Query(None, description='Статусы (мультиселект)'),
+    deadline_from: datetime | None = Query(None, description='Дедлайн от'),
+    deadline_to: datetime | None = Query(None, description='Дедлайн до'),
+    executor_id: str | None = Query(None, description='ID исполнителя (одиночный выбор)'),
+    qa_id: str | None = Query(None, description='ID QA (одиночный выбор)'),
+    created_from: datetime | None = Query(None, description='Создано от'),
+    created_to: datetime | None = Query(None, description='Создано до'),
+    tab: str | None = Query(None, description='Вкладка: my_tasks, outdated, all_filters'),
+    user_login=Depends(require_auth),
+    session: AsyncSession = Depends(get_session),
 ):
     """Фильтрация entity по заданным критериям"""
-    # Получаем текущего пользователя
     user_query = select(User).where(User.login == user_login)
     user_result = await session.execute(user_query)
     user = user_result.scalar_one()
 
-    # Обработка специальных вкладок
-    if tab == "my_tasks":
+    if tab == 'my_tasks':
         return await get_my_tasks(user, session)
-    elif tab == "outdated":
+    elif tab == 'outdated':
         return await get_outdated_tasks(user, session)
 
-    # Базовая фильтрация для вкладки "All filters"
     entities = await filter_entities_query(
         user=user,
         session=session,
@@ -121,62 +99,44 @@ async def filter_entities(
         created_to=created_to,
     )
 
-    return {"entities": entities}
+    return {'entities': entities}
 
 
 async def filter_entities_query(
-        user: User,
-        session: AsyncSession,
-        entity_types: Optional[List[str]] = None,
-        channel_ids: Optional[List[str]] = None,
-        chat_ids: Optional[List[str]] = None,
-        author_id: Optional[str] = None,
-        statuses: Optional[List[str]] = None,
-        deadline_from: Optional[datetime] = None,
-        deadline_to: Optional[datetime] = None,
-        executor_id: Optional[str] = None,
-        qa_id: Optional[str] = None,
-        created_from: Optional[datetime] = None,
-        created_to: Optional[datetime] = None,
-) -> List[Dict[str, Any]]:
+    user: User,
+    session: AsyncSession,
+    entity_types: list[str] | None = None,
+    channel_ids: list[str] | None = None,
+    chat_ids: list[str] | None = None,
+    author_id: str | None = None,
+    statuses: list[str] | None = None,
+    deadline_from: datetime | None = None,
+    deadline_to: datetime | None = None,
+    executor_id: str | None = None,
+    qa_id: str | None = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
+) -> list[dict[str, Any]]:
     """Основной запрос фильтрации entity"""
-
-    # Базовый запрос с загрузкой всех связанных данных
-    query = (
-        select(Entity)
-        .options(
-            selectinload(Entity.author),
-            selectinload(Entity.channel),
-            selectinload(Entity.direct_chat),
-            selectinload(Entity.comments),
-            selectinload(Entity.question),
-            selectinload(Entity.defect).options(
-                joinedload(DefectEntity.executor),
-                joinedload(DefectEntity.qa)
-            ),
-            selectinload(Entity.task).options(
-                joinedload(TaskEntity.executor),
-                joinedload(TaskEntity.qa)
-            ),
-            selectinload(Entity.info).selectinload(
-                InfoEntity.required_users
-            ).selectinload(InfoRequiredUser.user),
-            selectinload(Entity.proposal),
-            selectinload(Entity.action_point).options(
-                joinedload(ActionPointEntity.executor)
-            ),
-        )
+    query = select(Entity).options(
+        selectinload(Entity.author),
+        selectinload(Entity.channel),
+        selectinload(Entity.direct_chat),
+        selectinload(Entity.comments),
+        selectinload(Entity.question),
+        selectinload(Entity.defect).options(joinedload(DefectEntity.executor), joinedload(DefectEntity.qa)),
+        selectinload(Entity.task).options(joinedload(TaskEntity.executor), joinedload(TaskEntity.qa)),
+        selectinload(Entity.info).selectinload(InfoEntity.required_users).selectinload(InfoRequiredUser.user),
+        selectinload(Entity.proposal),
+        selectinload(Entity.action_point).options(joinedload(ActionPointEntity.executor)),
     )
 
-    # Фильтр по доступности для пользователя
-    # Пользователь должен иметь доступ либо к каналу, либо к чату
     channel_conditions = []
     chat_conditions = []
 
     if channel_ids:
         channel_conditions.append(Entity.channel_id.in_([UUID(cid) for cid in channel_ids]))
     else:
-        # Все каналы пользователя
         user_channel_ids = [ch.id for ch in user.channels]
         if user_channel_ids:
             channel_conditions.append(Entity.channel_id.in_(user_channel_ids))
@@ -184,12 +144,10 @@ async def filter_entities_query(
     if chat_ids:
         chat_conditions.append(Entity.direct_chat_id.in_([UUID(cid) for cid in chat_ids]))
     else:
-        # Все чаты пользователя
         user_chat_ids = [chat.id for chat in user.direct_chats if not chat.is_self_chat]
         if user_chat_ids:
             chat_conditions.append(Entity.direct_chat_id.in_(user_chat_ids))
 
-    # Объединяем условия доступа: (каналы ИЛИ чаты)
     access_conditions = []
     if channel_conditions:
         access_conditions.append(and_(*channel_conditions))
@@ -199,29 +157,23 @@ async def filter_entities_query(
     if access_conditions:
         query = query.where(or_(*access_conditions))
     else:
-        # Если нет условий доступа, возвращаем пустой список
         return []
 
-    # Фильтр по типам entity
     if entity_types:
         entity_type_enums = [EntityTypeEnum(et) for et in entity_types]
         query = query.where(Entity.type.in_(entity_type_enums))
 
-    # Фильтр по автору
     if author_id:
         query = query.where(Entity.author_id == UUID(author_id))
 
-    # Фильтр по дате создания
     if created_from:
         query = query.where(Entity.created_at >= created_from)
     if created_to:
         query = query.where(Entity.created_at <= created_to)
 
-    # Выполняем запрос
     result = await session.execute(query)
     entities = result.scalars().all()
 
-    # Собираем acknowledges для всех Info entity
     acknowledges_dict = {}
     info_entity_ids = [str(entity.id) for entity in entities if entity.type == EntityTypeEnum.info]
 
@@ -242,55 +194,47 @@ async def filter_entities_query(
                 'acknowledged_at': ack.acknowledged_at.isoformat() if ack.acknowledged_at else None,
             }
 
-    # Дополнительная фильтрация на уровне Python для сложных условий
     filtered_entities = []
 
     for entity in entities:
-        # Фильтр по статусам (теперь передаем acknowledges_dict)
         if statuses and not check_entity_status(entity, statuses, user.id, acknowledges_dict):
             continue
 
-        # Фильтр по дедлайну
         if not check_deadline(entity, deadline_from, deadline_to):
             continue
 
-        # Фильтр по исполнителю - только если фильтр применен
         if executor_id:
             if not check_executor(entity, UUID(executor_id)):
                 continue
 
-        # Фильтр по QA - только если фильтр применен
         if qa_id:
             if not check_qa(entity, UUID(qa_id)):
                 continue
 
         filtered_entities.append(entity)
 
-    # Преобразуем entity в словари
     result_list = []
     for entity in filtered_entities:
         entity_dict = await entity_to_dict(entity, user.id, session, acknowledges_dict)
         result_list.append(entity_dict)
 
-    # Сортировка
-    result_list.sort(key=lambda x: (
-        # 1. Сначала сущности с дедлайном (0), потом без (1)
-        1 if x.get('deadline') is None else 0,
-        # 2. Для сущностей с дедлайном - сортируем по самому дедлайну
-        parse_datetime(x.get('deadline')) if x.get('deadline') else datetime.max.replace(tzinfo=timezone.utc),
-        # 3. По priority (чем больше, тем выше)
-        - (x.get('priority') or 0)
-    ))
+    result_list.sort(
+        key=lambda x: (
+            1 if x.get('deadline') is None else 0,
+            parse_datetime(x.get('deadline')) if x.get('deadline') else datetime.max.replace(tzinfo=UTC),
+            -(x.get('priority') or 0),
+        )
+    )
 
     return result_list
 
 
-def check_entity_status(entity: Entity, statuses: List[str], user_id: UUID,
-                        acknowledges_dict: Dict[str, Dict[str, Any]]) -> bool:
+def check_entity_status(
+    entity: Entity, statuses: list[str], user_id: UUID, acknowledges_dict: dict[str, dict[str, Any]]
+) -> bool:
     """Проверка статуса entity с учетом специальных статусов для Info"""
     entity_status = None
 
-    # Получаем статус в зависимости от типа entity
     if entity.type == EntityTypeEnum.question and entity.question:
         entity_status = entity.question.status.value
     elif entity.type == EntityTypeEnum.defect and entity.defect:
@@ -298,8 +242,6 @@ def check_entity_status(entity: Entity, statuses: List[str], user_id: UUID,
     elif entity.type == EntityTypeEnum.task and entity.task:
         entity_status = entity.task.status.value
     elif entity.type == EntityTypeEnum.info and entity.info:
-        # Для Info проверяем статус прочтения текущим пользователем
-        # Проверяем, есть ли пользователь в required_users
         is_required = False
         if entity.info.required_users:
             for ru in entity.info.required_users:
@@ -308,25 +250,23 @@ def check_entity_status(entity: Entity, statuses: List[str], user_id: UUID,
                     break
 
         if is_required:
-            # Проверяем, прочитал ли пользователь через acknowledges_dict
             entity_id_str = str(entity.id)
             user_id_str = str(user_id)
-            if (entity_id_str in acknowledges_dict and
-                    user_id_str in acknowledges_dict[entity_id_str] and
-                    acknowledges_dict[entity_id_str][user_id_str]['acknowledged']):
-                entity_status = "read"
+            if (
+                entity_id_str in acknowledges_dict
+                and user_id_str in acknowledges_dict[entity_id_str]
+                and acknowledges_dict[entity_id_str][user_id_str]['acknowledged']
+            ):
+                entity_status = 'read'
             else:
-                entity_status = "unread"
+                entity_status = 'unread'
         else:
-            # Если пользователь не в required_users, пропускаем фильтр по статусу
-            # Но добавляем специальный статус для фильтрации
-            entity_status = "not_required"
+            entity_status = 'not_required'
     elif entity.type == EntityTypeEnum.proposal and entity.proposal:
         entity_status = entity.proposal.status.value
     elif entity.type == EntityTypeEnum.action_point and entity.action_point:
         entity_status = entity.action_point.status.value
 
-    # Проверяем соответствие статуса фильтру
     return entity_status in statuses if entity_status else False
 
 
@@ -335,8 +275,6 @@ def check_info_read(entity: Entity, user_id: UUID) -> bool:
     if not entity.info:
         return False
 
-    # Для Info entity нужно проверить наличие записи в InfoRequiredUser
-    # и затем проверить Acknowledge
     is_required = False
     for ru in entity.info.required_users:
         if str(ru.user_id) == str(user_id):
@@ -349,11 +287,10 @@ def check_info_read(entity: Entity, user_id: UUID) -> bool:
     return False
 
 
-def check_deadline(entity: Entity, deadline_from: Optional[datetime], deadline_to: Optional[datetime]) -> bool:
+def check_deadline(entity: Entity, deadline_from: datetime | None, deadline_to: datetime | None) -> bool:
     """Проверка дедлайна entity"""
     entity_deadline = None
 
-    # Получаем дедлайн в зависимости от типа entity
     if entity.type == EntityTypeEnum.question and entity.question:
         entity_deadline = entity.question.deadline
     elif entity.type == EntityTypeEnum.defect and entity.defect:
@@ -365,11 +302,9 @@ def check_deadline(entity: Entity, deadline_from: Optional[datetime], deadline_t
     elif entity.type == EntityTypeEnum.action_point and entity.action_point:
         entity_deadline = entity.action_point.deadline
 
-    # Если у entity нет дедлайна, пропускаем фильтр
     if entity_deadline is None:
         return True
 
-    # Проверяем диапазон
     if deadline_from and entity_deadline < deadline_from:
         return False
     if deadline_to and entity_deadline > deadline_to:
@@ -380,11 +315,9 @@ def check_deadline(entity: Entity, deadline_from: Optional[datetime], deadline_t
 
 def check_executor(entity: Entity, executor_id: UUID) -> bool:
     """Проверка исполнителя entity"""
-    # Для типов Entity без поля исполнителя сразу возвращаем False
     if entity.type not in [EntityTypeEnum.defect, EntityTypeEnum.task, EntityTypeEnum.action_point]:
         return False
 
-    # Проверяем конкретные типы
     if entity.type == EntityTypeEnum.defect and entity.defect:
         return str(entity.defect.executor_id) == str(executor_id)
     elif entity.type == EntityTypeEnum.task and entity.task:
@@ -397,11 +330,9 @@ def check_executor(entity: Entity, executor_id: UUID) -> bool:
 
 def check_qa(entity: Entity, qa_id: UUID) -> bool:
     """Проверка QA entity"""
-    # Для типов Entity без поля QA сразу возвращаем False
     if entity.type not in [EntityTypeEnum.defect, EntityTypeEnum.task]:
         return False
 
-    # Проверяем конкретные типы
     if entity.type == EntityTypeEnum.defect and entity.defect:
         return str(entity.defect.qa_id) == str(qa_id)
     elif entity.type == EntityTypeEnum.task and entity.task:
@@ -410,10 +341,10 @@ def check_qa(entity: Entity, qa_id: UUID) -> bool:
     return False
 
 
-async def entity_to_dict(entity: Entity, user_id: UUID, session: AsyncSession,
-                         acknowledges_dict: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+async def entity_to_dict(
+    entity: Entity, user_id: UUID, session: AsyncSession, acknowledges_dict: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
     """Преобразование entity в словарь для отображения"""
-    # Базовые данные entity
     entity_data = {
         'id': str(entity.id),
         'type': entity.type.value,
@@ -425,7 +356,6 @@ async def entity_to_dict(entity: Entity, user_id: UUID, session: AsyncSession,
         'comment_count': len(entity.comments) if entity.comments else 0,
     }
 
-    # Определяем источник (чат или канал)
     if entity.channel:
         entity_data['source_type'] = 'channel'
         entity_data['source_id'] = str(entity.channel.id)
@@ -433,19 +363,17 @@ async def entity_to_dict(entity: Entity, user_id: UUID, session: AsyncSession,
     elif entity.direct_chat:
         entity_data['source_type'] = 'chat'
         entity_data['source_id'] = str(entity.direct_chat.id)
-        # Находим других пользователей в чате для отображения имени
         other_users = [u for u in entity.direct_chat.users if str(u.id) != str(entity.author_id)]
         if other_users:
             entity_data['source_name'] = other_users[0].display_name
         else:
             entity_data['source_name'] = 'Direct Chat'
 
-    # Добавляем информацию о конкретном типе Entity
     if entity.type == EntityTypeEnum.question and entity.question:
         deadline = None
         if entity.question.deadline:
             if entity.question.deadline.tzinfo is None:
-                deadline = entity.question.deadline.replace(tzinfo=timezone.utc).isoformat()
+                deadline = entity.question.deadline.replace(tzinfo=UTC).isoformat()
             else:
                 deadline = entity.question.deadline.isoformat()
         entity_data.update({
@@ -458,7 +386,7 @@ async def entity_to_dict(entity: Entity, user_id: UUID, session: AsyncSession,
         deadline = None
         if entity.defect.deadline:
             if entity.defect.deadline.tzinfo is None:
-                deadline = entity.defect.deadline.replace(tzinfo=timezone.utc).isoformat()
+                deadline = entity.defect.deadline.replace(tzinfo=UTC).isoformat()
             else:
                 deadline = entity.defect.deadline.isoformat()
         entity_data.update({
@@ -476,7 +404,7 @@ async def entity_to_dict(entity: Entity, user_id: UUID, session: AsyncSession,
         deadline = None
         if entity.task.deadline:
             if entity.task.deadline.tzinfo is None:
-                deadline = entity.task.deadline.replace(tzinfo=timezone.utc).isoformat()
+                deadline = entity.task.deadline.replace(tzinfo=UTC).isoformat()
             else:
                 deadline = entity.task.deadline.isoformat()
         entity_data.update({
@@ -501,25 +429,24 @@ async def entity_to_dict(entity: Entity, user_id: UUID, session: AsyncSession,
                 user_data = {'id': str(ru.user.id), 'display_name': ru.user.display_name}
                 required_users_list.append(user_data)
 
-                # Проверяем, есть ли подтверждение в acknowledges_dict
                 entity_id_str = str(entity.id)
                 user_id_str = str(ru.user.id)
 
-                if (entity_id_str in acknowledges_dict and
-                        user_id_str in acknowledges_dict[entity_id_str] and
-                        acknowledges_dict[entity_id_str][user_id_str]['acknowledged']):
+                if (
+                    entity_id_str in acknowledges_dict
+                    and user_id_str in acknowledges_dict[entity_id_str]
+                    and acknowledges_dict[entity_id_str][user_id_str]['acknowledged']
+                ):
                     read_count += 1
                     if user_id_str == str(user_id):
                         has_read = True
                 else:
                     all_acknowledged = False
 
-        # Форматируем дедлайн с временной зоной
         deadline = None
         if entity.info.deadline:
             if entity.info.deadline.tzinfo is None:
-                # Если нет временной зоны, добавляем UTC
-                deadline = entity.info.deadline.replace(tzinfo=timezone.utc).isoformat()
+                deadline = entity.info.deadline.replace(tzinfo=UTC).isoformat()
             else:
                 deadline = entity.info.deadline.isoformat()
 
@@ -541,7 +468,7 @@ async def entity_to_dict(entity: Entity, user_id: UUID, session: AsyncSession,
         deadline = None
         if entity.action_point.deadline:
             if entity.action_point.deadline.tzinfo is None:
-                deadline = entity.action_point.deadline.replace(tzinfo=timezone.utc).isoformat()
+                deadline = entity.action_point.deadline.replace(tzinfo=UTC).isoformat()
             else:
                 deadline = entity.action_point.deadline.isoformat()
         entity_data.update({
@@ -556,25 +483,15 @@ async def entity_to_dict(entity: Entity, user_id: UUID, session: AsyncSession,
     return entity_data
 
 
-async def get_my_tasks(user: User, session: AsyncSession) -> Dict[str, Any]:
+async def get_my_tasks(user: User, session: AsyncSession) -> dict[str, Any]:
     """Получение задач пользователя для вкладки My Tasks"""
     user_id = user.id
 
-    # Определяем статусы, которые НЕ включаем
-    excluded_statuses = [
-        'closed', 'rejected', 'accepted', 'read'
-    ]
+    excluded_statuses = ['closed', 'rejected', 'accepted', 'read']
 
-    # Получаем все статусы
     all_statuses = await get_all_statuses(session)
-    # Фильтруем исключенные статусы
-    included_statuses = [status['id'] for status in all_statuses
-                         if status['id'] not in excluded_statuses]
+    included_statuses = [status['id'] for status in all_statuses if status['id'] not in excluded_statuses]
 
-    # Загружаем acknowledges_dict отдельно для всех вызовов
-    acknowledges_dict = {}
-
-    # 1. Задачи, где пользователь - автор
     author_tasks = await filter_entities_query(
         user=user,
         session=session,
@@ -582,7 +499,6 @@ async def get_my_tasks(user: User, session: AsyncSession) -> Dict[str, Any]:
         statuses=included_statuses,
     )
 
-    # 2. Задачи, где пользователь - исполнитель
     executor_tasks = await filter_entities_query(
         user=user,
         session=session,
@@ -590,7 +506,6 @@ async def get_my_tasks(user: User, session: AsyncSession) -> Dict[str, Any]:
         statuses=included_statuses,
     )
 
-    # 3. Задачи, где пользователь - QA
     qa_tasks = await filter_entities_query(
         user=user,
         session=session,
@@ -598,134 +513,100 @@ async def get_my_tasks(user: User, session: AsyncSession) -> Dict[str, Any]:
         statuses=included_statuses,
     )
 
-    # 4. Info entity, где пользователь - автор или в required_users
-    # Сначала получаем все Info entity, доступные пользователю
     info_tasks = await filter_entities_query(
         user=user,
         session=session,
         entity_types=['info'],
     )
 
-    # Фильтруем Info entity по новым правилам
     filtered_info_tasks = []
     for task in info_tasks:
-        # Проверяем, является ли пользователь автором
         is_author = task.get('author_id') == str(user_id)
 
-        # Проверяем, находится ли пользователь в required_users
         is_in_required_users = False
         if task.get('required_users'):
-            is_in_required_users = any(
-                ru['id'] == str(user_id) for ru in task['required_users']
-            )
+            is_in_required_users = any(ru['id'] == str(user_id) for ru in task['required_users'])
 
         if is_author:
-            # Для автора: показываем только если не все required_users подтвердили
             if not task.get('all_acknowledged', True):
                 filtered_info_tasks.append(task)
         elif is_in_required_users:
-            # Для пользователя в required_users: показываем только если он не прочитал
             if not task.get('has_read', False):
                 filtered_info_tasks.append(task)
 
-    # Объединяем и убираем дубликаты
     all_tasks = {}
 
-    # Добавляем обычные задачи (не info)
     for task in author_tasks + executor_tasks + qa_tasks:
         if task.get('type') != 'info':
             all_tasks[task['id']] = task
 
-    # Добавляем отфильтрованные info задачи
     for task in filtered_info_tasks:
         all_tasks[task['id']] = task
 
-    # Преобразуем в список
     result_list = list(all_tasks.values())
 
-    # ДОБАВЛЯЕМ СОРТИРОВКУ
-    result_list.sort(key=lambda x: (
-        # 1. Сначала сущности с дедлайном (0), потом без (1)
-        1 if x.get('deadline') is None else 0,
-        # 2. Для сущностей с дедлайном - сортируем по самому дедлайну
-        parse_datetime(x.get('deadline')) if x.get('deadline') else datetime.max.replace(tzinfo=timezone.utc),
-        # 3. По priority (чем больше, тем выше)
-        - (x.get('priority') or 0)
-    ))
+    result_list.sort(
+        key=lambda x: (
+            1 if x.get('deadline') is None else 0,
+            parse_datetime(x.get('deadline')) if x.get('deadline') else datetime.max.replace(tzinfo=UTC),
+            -(x.get('priority') or 0),
+        )
+    )
 
-    return {"entities": result_list}
+    return {'entities': result_list}
 
 
-async def get_outdated_tasks(user: User, session: AsyncSession) -> Dict[str, Any]:
+async def get_outdated_tasks(user: User, session: AsyncSession) -> dict[str, Any]:
     """Получение просроченных задач"""
-    current_time = datetime.now(timezone.utc)
+    current_time = datetime.now(UTC)
 
-    # Фильтруем задачи с дедлайном до текущего времени
     outdated_tasks = await filter_entities_query(
         user=user,
         session=session,
         deadline_to=current_time,
     )
 
-    # Фильтруем только те, у которых статус не завершен
-    active_statuses = [
-        'created', 'in_progress', 'ready_for_test', 'in_testing',
-        'discussed', 'answered', 'unread'
-    ]
+    active_statuses = ['created', 'in_progress', 'ready_for_test', 'in_testing', 'discussed', 'answered', 'unread']
 
     filtered_tasks = []
     for task in outdated_tasks:
         if task.get('status') in active_statuses:
             filtered_tasks.append(task)
 
-    # ДОБАВЛЯЕМ СОРТИРОВКУ
-    filtered_tasks.sort(key=lambda x: (
-        # 1. Сначала сущности с дедлайном (0), потом без (1) - но здесь все с дедлайном
-        1 if x.get('deadline') is None else 0,
-        # 2. Для сущностей с дедлайном - сортируем по самому дедлайну
-        parse_datetime(x.get('deadline')) if x.get('deadline') else datetime.max.replace(tzinfo=timezone.utc),
-        # 3. По priority (чем больше, тем выше)
-        - (x.get('priority') or 0)
-    ))
+    filtered_tasks.sort(
+        key=lambda x: (
+            1 if x.get('deadline') is None else 0,
+            parse_datetime(x.get('deadline')) if x.get('deadline') else datetime.max.replace(tzinfo=UTC),
+            -(x.get('priority') or 0),
+        )
+    )
 
-    return {"entities": filtered_tasks}
+    return {'entities': filtered_tasks}
 
 
 @router.get('/api/task-explorer/filter-options', response_class=JSONResponse)
-async def get_filter_options(
-        user_login=Depends(require_auth),
-        session: AsyncSession = Depends(get_session)
-):
+async def get_filter_options(user_login=Depends(require_auth), session: AsyncSession = Depends(get_session)):
     """Получение всех опций для фильтров"""
     user_query = select(User).where(User.login == user_login)
     user_result = await session.execute(user_query)
     user = user_result.scalar_one()
 
-    # Получаем все типы entity
     entity_types = await get_all_entity_types(session)
 
-    # Получаем каналы пользователя
     channels_by_group = {}
     for ch in user.channels:
         if ch.group.value not in channels_by_group:
             channels_by_group[ch.group.value] = []
-        channels_by_group[ch.group.value].append({
-            'id': str(ch.id),
-            'name': ch.name
-        })
+        channels_by_group[ch.group.value].append({'id': str(ch.id), 'name': ch.name})
 
-    # Получаем чаты пользователя
     chats_by_dept = {}
     user_chats_query = (
-        select(DirectChat)
-        .join(DirectChat.users)
-        .where(DirectChat.is_self_chat == False, User.id == user.id)
+        select(DirectChat).join(DirectChat.users).where(DirectChat.is_self_chat == False, User.id == user.id)
     )
     chats_result = await session.execute(user_chats_query)
     chats = chats_result.scalars().all()
 
     for chat in chats:
-        # Находим другого пользователя в чате
         other_user = next(u for u in chat.users if u.id != user.id)
         dept = other_user.department.value
 
@@ -738,7 +619,6 @@ async def get_filter_options(
             'user_id': str(other_user.id),
         })
 
-    # Получаем всех пользователей (сгруппированных по департаментам)
     users_by_dept = {}
     all_users_query = select(User).order_by(User.department, User.display_name)
     all_users_result = await session.execute(all_users_query)
@@ -749,13 +629,8 @@ async def get_filter_options(
         if dept not in users_by_dept:
             users_by_dept[dept] = []
 
-        users_by_dept[dept].append({
-            'id': str(u.id),
-            'display_name': u.display_name,
-            'is_me': u.id == user.id
-        })
+        users_by_dept[dept].append({'id': str(u.id), 'display_name': u.display_name, 'is_me': u.id == user.id})
 
-    # Получаем все статусы
     statuses = await get_all_statuses(session)
 
     return {
@@ -764,109 +639,73 @@ async def get_filter_options(
         'chats': chats_by_dept,
         'users': users_by_dept,
         'statuses': statuses,
-        'current_user_id': str(user.id)
+        'current_user_id': str(user.id),
     }
 
 
-async def get_all_entity_types(session: AsyncSession) -> List[Dict[str, str]]:
+async def get_all_entity_types(session: AsyncSession) -> list[dict[str, str]]:
     """Получение всех уникальных типов entity"""
-    # Используем список для сохранения порядка и set для проверки уникальности
     unique_types = []
     seen_types = set()
 
     for entity_type in EntityTypeEnum:
         if entity_type.value not in seen_types:
             seen_types.add(entity_type.value)
-            unique_types.append({
-                'id': entity_type.value,
-                'name': entity_type.value.replace('_', ' ').title()
-            })
+            unique_types.append({'id': entity_type.value, 'name': entity_type.value.replace('_', ' ').title()})
 
     return unique_types
 
 
-async def get_all_statuses(session: AsyncSession) -> List[Dict[str, str]]:
+async def get_all_statuses(session: AsyncSession) -> list[dict[str, str]]:
     """Получение всех уникальных статусов без дубликатов"""
     statuses = []
     seen_statuses = set()
 
-    # Статусы Question
     for status in QuestionStatus:
         status_value = status.value
         status_name = status_value.replace('_', ' ').title()
         if status_value not in seen_statuses:
             seen_statuses.add(status_value)
-            statuses.append({
-                'id': status_value,
-                'name': status_name,
-                'entity_type': 'question'
-            })
+            statuses.append({'id': status_value, 'name': status_name, 'entity_type': 'question'})
 
-    # Статусы Defect
     for status in DefectStatus:
         status_value = status.value
         status_name = status_value.replace('_', ' ').title()
         if status_value not in seen_statuses:
             seen_statuses.add(status_value)
-            statuses.append({
-                'id': status_value,
-                'name': status_name,
-                'entity_type': 'defect'
-            })
+            statuses.append({'id': status_value, 'name': status_name, 'entity_type': 'defect'})
 
-    # Статусы Task (будут пропущены, так как совпадают с Defect)
     for status in TaskStatus:
         status_value = status.value
         status_name = status_value.replace('_', ' ').title()
         if status_value not in seen_statuses:
             seen_statuses.add(status_value)
-            statuses.append({
-                'id': status_value,
-                'name': status_name,
-                'entity_type': 'task'
-            })
+            statuses.append({'id': status_value, 'name': status_name, 'entity_type': 'task'})
 
-    # Статусы Proposal
     for status in ProposalStatus:
         status_value = status.value
         status_name = status_value.replace('_', ' ').title()
         if status_value not in seen_statuses:
             seen_statuses.add(status_value)
-            statuses.append({
-                'id': status_value,
-                'name': status_name,
-                'entity_type': 'proposal'
-            })
+            statuses.append({'id': status_value, 'name': status_name, 'entity_type': 'proposal'})
 
-    # Статусы Action Point
     for status in ActionPointStatus:
         status_value = status.value
         status_name = status_value.replace('_', ' ').title()
         if status_value not in seen_statuses:
             seen_statuses.add(status_value)
-            statuses.append({
-                'id': status_value,
-                'name': status_name,
-                'entity_type': 'action_point'
-            })
+            statuses.append({'id': status_value, 'name': status_name, 'entity_type': 'action_point'})
 
-    # Специальные статусы для Info
     for status_id, status_name in [('read', 'Read'), ('unread', 'Unread'), ('not_required', 'Not Required')]:
         if status_id not in seen_statuses:
             seen_statuses.add(status_id)
-            statuses.append({
-                'id': status_id,
-                'name': status_name,
-                'entity_type': 'info'
-            })
+            statuses.append({'id': status_id, 'name': status_name, 'entity_type': 'info'})
 
     return statuses
 
 
 def generate_task_explorer_html(user: User) -> HTMLResponse:
-    """Генерирует HTML страницу для Task Explorer"""
-
-    # Экранируем данные для безопасной вставки в JavaScript
+    """Генерирует HTML страницу для Обозреватель задач"""
     user_id_escaped = json.dumps(str(user.id))
     user_display_name_escaped = json.dumps(user.display_name)
 
@@ -874,11 +713,10 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Task Explorer</title>
+        <title>Обозреватель задач</title>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-            /* Стили из chat_channel_view.py с дополнениями */
             *, *::before, *::after {{
                 box-sizing: border-box;
             }}
@@ -1191,7 +1029,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 max-width: 300px;
             }}
 
-            /* Скрываем старые селекты */
             #filter-entity-types,
             #filter-channels,
             #filter-chats,
@@ -1199,7 +1036,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 display: none;
             }}
 
-            /* Обновляем стили для остальных фильтров */
             .regular-filter-group {{
                 flex: 1;
                 min-width: 220px;
@@ -1219,7 +1055,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 font-size: 13px;
             }}
 
-            /* Улучшаем отображение при множественном выборе в обычных селектах */
             .filter-select[multiple] {{
                 height: 120px;
             }}
@@ -1296,7 +1131,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 opacity: 0.5;
             }}
 
-            /* Стили для отображения entity */
             .entity-list {{
                 display: flex;
                 flex-direction: column;
@@ -1492,14 +1326,12 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 margin-top: 5px;
             }}
 
-            /* Стиль для группы с date inputs */
             .date-filter-group {{
                 flex: 1;
                 min-width: 300px;
                 max-width: 500px;
             }}
 
-            /* Адаптивная верстка для дат */
             @media (max-width: 1200px) {{
                 .date-filter-group {{
                     min-width: 100%;
@@ -1509,30 +1341,27 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
     </head>
     <body>
         <div class="container">
-            <div class="sidebar" id="sidebar">
-                <!-- Навигация будет загружена через JavaScript -->
-            </div>
+            <div class="sidebar" id="sidebar"></div>
 
             <div class="main-content">
                 <div class="header">
-                    <h2>Task Explorer</h2>
+                    <h2>Обозреватель задач</h2>
                 </div>
 
                 <div class="tabs">
-                    <button class="tab active" data-tab="my-tasks">My Tasks</button>
-                    <button class="tab" data-tab="outdated">Outdated</button>
-                    <button class="tab" data-tab="all-filters">All Filters</button>
+                    <button class="tab active" data-tab="my-tasks">Мои задачи</button>
+                    <button class="tab" data-tab="outdated">Просроченные</button>
+                    <button class="tab" data-tab="all-filters">Все фильтры</button>
                 </div>
 
                 <div class="filters-panel" id="filters-panel">
                     <div class="filter-row">
-                        <!-- Entity Types - компактный фильтр -->
                         <div class="compact-filter-group">
-                            <label class="filter-label">Entity Types</label>
+                            <label class="filter-label">Типы сущностей</label>
                             <div class="compact-filter" id="compact-filter-entity-types">
                                 <div class="compact-filter-header" onclick="toggleCompactFilter('entity-types')">
                                     <div class="compact-filter-title">
-                                        <span class="filter-name">All Entity Types</span>
+                                        <span class="filter-name">Все типы сущностей</span>
                                         <span class="filter-counter" id="counter-entity-types"></span>
                                     </div>
                                     <span class="compact-filter-arrow">▼</span>
@@ -1540,31 +1369,27 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                                 <div class="compact-filter-content" id="content-entity-types">
                                     <div class="filter-search">
                                         <input type="text" class="filter-search-input" 
-                                               placeholder="Search types..." 
+                                               placeholder="Искать типы..." 
                                                onkeyup="filterOptionsFunc('entity-types', this.value)">
                                     </div>
-                                    <div class="filter-checkboxes" id="checkboxes-entity-types">
-                                        <!-- Заполнится через JavaScript -->
-                                    </div>
+                                    <div class="filter-checkboxes" id="checkboxes-entity-types"></div>
                                     <div class="filter-actions">
                                         <button type="button" class="select-all-btn" 
-                                                onclick="selectAll('entity-types')">Select All</button>
+                                                onclick="selectAll('entity-types')">Выбрать все</button>
                                         <button type="button" class="clear-selection-btn" 
-                                                onclick="clearSelection('entity-types')">Clear</button>
+                                                onclick="clearSelection('entity-types')">Очистить</button>
                                     </div>
                                 </div>
                             </div>
-                            <!-- Скрытый select для обратной совместимости -->
                             <select class="filter-select" id="filter-entity-types" multiple style="display: none;"></select>
                         </div>
 
-                        <!-- Channels - компактный фильтр -->
                         <div class="compact-filter-group">
-                            <label class="filter-label">Channels</label>
+                            <label class="filter-label">Каналы</label>
                             <div class="compact-filter" id="compact-filter-channels">
                                 <div class="compact-filter-header" onclick="toggleCompactFilter('channels')">
                                     <div class="compact-filter-title">
-                                        <span class="filter-name">All Channels</span>
+                                        <span class="filter-name">Все каналы</span>
                                         <span class="filter-counter" id="counter-channels"></span>
                                     </div>
                                     <span class="compact-filter-arrow">▼</span>
@@ -1572,30 +1397,27 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                                 <div class="compact-filter-content" id="content-channels">
                                     <div class="filter-search">
                                         <input type="text" class="filter-search-input" 
-                                               placeholder="Search channels..." 
+                                               placeholder="Искать каналы..." 
                                                onkeyup="filterOptionsFunc('channels', this.value)">
                                     </div>
-                                    <div class="filter-checkboxes" id="checkboxes-channels">
-                                        <!-- Заполнится через JavaScript -->
-                                    </div>
+                                    <div class="filter-checkboxes" id="checkboxes-channels"></div>
                                     <div class="filter-actions">
                                         <button type="button" class="select-all-btn" 
-                                                onclick="selectAll('channels')">Select All</button>
+                                                onclick="selectAll('channels')">Выбрать все</button>
                                         <button type="button" class="clear-selection-btn" 
-                                                onclick="clearSelection('channels')">Clear</button>
+                                                onclick="clearSelection('channels')">Очистить</button>
                                     </div>
                                 </div>
                             </div>
                             <select class="filter-select" id="filter-channels" multiple style="display: none;"></select>
                         </div>
 
-                        <!-- Chats - компактный фильтр -->
                         <div class="compact-filter-group">
-                            <label class="filter-label">Chats</label>
+                            <label class="filter-label">Чаты</label>
                             <div class="compact-filter" id="compact-filter-chats">
                                 <div class="compact-filter-header" onclick="toggleCompactFilter('chats')">
                                     <div class="compact-filter-title">
-                                        <span class="filter-name">All Chats</span>
+                                        <span class="filter-name">Все чаты</span>
                                         <span class="filter-counter" id="counter-chats"></span>
                                     </div>
                                     <span class="compact-filter-arrow">▼</span>
@@ -1603,30 +1425,27 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                                 <div class="compact-filter-content" id="content-chats">
                                     <div class="filter-search">
                                         <input type="text" class="filter-search-input" 
-                                               placeholder="Search chats..." 
+                                               placeholder="Искать чаты..." 
                                                onkeyup="filterOptionsFunc('chats', this.value)">
                                     </div>
-                                    <div class="filter-checkboxes" id="checkboxes-chats">
-                                        <!-- Заполнится через JavaScript -->
-                                    </div>
+                                    <div class="filter-checkboxes" id="checkboxes-chats"></div>
                                     <div class="filter-actions">
                                         <button type="button" class="select-all-btn" 
-                                                onclick="selectAll('chats')">Select All</button>
+                                                onclick="selectAll('chats')">Выбрать все</button>
                                         <button type="button" class="clear-selection-btn" 
-                                                onclick="clearSelection('chats')">Clear</button>
+                                                onclick="clearSelection('chats')">Очистить</button>
                                     </div>
                                 </div>
                             </div>
                             <select class="filter-select" id="filter-chats" multiple style="display: none;"></select>
                         </div>
 
-                        <!-- Status - компактный фильтр -->
                         <div class="compact-filter-group">
-                            <label class="filter-label">Status</label>
+                            <label class="filter-label">Статусы</label>
                             <div class="compact-filter" id="compact-filter-status">
                                 <div class="compact-filter-header" onclick="toggleCompactFilter('status')">
                                     <div class="compact-filter-title">
-                                        <span class="filter-name">All Statuses</span>
+                                        <span class="filter-name">Все статусы</span>
                                         <span class="filter-counter" id="counter-status"></span>
                                     </div>
                                     <span class="compact-filter-arrow">▼</span>
@@ -1634,17 +1453,15 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                                 <div class="compact-filter-content" id="content-status">
                                     <div class="filter-search">
                                         <input type="text" class="filter-search-input" 
-                                               placeholder="Search statuses..." 
+                                               placeholder="Искать статусы..." 
                                                onkeyup="filterOptionsFunc('status', this.value)">
                                     </div>
-                                    <div class="filter-checkboxes" id="checkboxes-status">
-                                        <!-- Заполнится через JavaScript -->
-                                    </div>
+                                    <div class="filter-checkboxes" id="checkboxes-status"></div>
                                     <div class="filter-actions">
                                         <button type="button" class="select-all-btn" 
-                                                onclick="selectAll('status')">Select All</button>
+                                                onclick="selectAll('status')">Выбрать все</button>
                                         <button type="button" class="clear-selection-btn" 
-                                                onclick="clearSelection('status')">Clear</button>
+                                                onclick="clearSelection('status')">Очистить</button>
                                     </div>
                                 </div>
                             </div>
@@ -1653,45 +1470,39 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                     </div>
 
                     <div class="filter-row">
-                        <!-- Остальные фильтры остаются как есть -->
                         <div class="regular-filter-group">
-                            <label class="filter-label">Author</label>
+                            <label class="filter-label">Автор</label>
                             <select class="filter-select" id="filter-author">
-                                <option value="">All Authors</option>
-                                <!-- Заполнится через JavaScript -->
+                                <option value="">Все авторы</option>
                             </select>
                         </div>
 
                         <div class="regular-filter-group">
-                            <label class="filter-label">Executor</label>
+                            <label class="filter-label">Исполнитель</label>
                             <select class="filter-select" id="filter-executor">
-                                <option value="">All Executors</option>
-                                <!-- Заполнится через JavaScript -->
+                                <option value="">Все исполнители</option>
                             </select>
                         </div>
 
                         <div class="regular-filter-group">
                             <label class="filter-label">QA</label>
                             <select class="filter-select" id="filter-qa">
-                                <option value="">All QA</option>
-                                <!-- Заполнится через JavaScript -->
+                                <option value="">Все QA</option>
                             </select>
                         </div>
                     </div>
 
                     <div class="filter-row">
-                        <!-- Deadline Range -->
                         <div class="date-filter-group">
-                            <label class="filter-label">Deadline Range</label>
+                            <label class="filter-label">Период планового закрытия</label>
                             <div class="date-input-group">
                                 <input type="datetime-local" class="date-input" id="filter-deadline-from">
                                 <input type="datetime-local" class="date-input" id="filter-deadline-to">
                             </div>
                         </div>
 
-                        <!-- Created Range -->
                         <div class="date-filter-group">
-                            <label class="filter-label">Created Range</label>
+                            <label class="filter-label">Период создания</label>
                             <div class="date-input-group">
                                 <input type="datetime-local" class="date-input" id="filter-created-from">
                                 <input type="datetime-local" class="date-input" id="filter-created-to">
@@ -1700,8 +1511,8 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                     </div>
 
                     <div class="filters-actions">
-                        <button class="clear-filters-btn" id="clear-filters">Clear All Filters</button>
-                        <button class="apply-filters-btn" id="apply-filters">Apply Filters</button>
+                        <button class="clear-filters-btn" id="clear-filters">Сбросить все фильтры</button>
+                        <button class="apply-filters-btn" id="apply-filters">Применить</button>
                     </div>
                 </div>
 
@@ -1718,29 +1529,26 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 <div class="tab-content" id="all-filters-content">
                     <div class="empty-state" id="all-filters-empty">
                         <div class="empty-state-icon">🔍</div>
-                        <h3>No filters applied</h3>
-                        <p>Use the filters above to find tasks</p>
+                        <h3>Фильтры не выбраны</h3>
+                        <p>Укажите фильтры для поиска сущностей</p>
                     </div>
-                    <div class="loading" id="all-filters-loading" style="display: none;">Applying filters...</div>
+                    <div class="loading" id="all-filters-loading" style="display: none;">Применение фильтров...</div>
                     <div class="entity-list" id="all-filters-list" style="display: none;"></div>
                 </div>
             </div>
         </div>
 
         <script>
-            // Сохраняем данные пользователя
             const userData = {{
                 userId: {user_id_escaped},
                 userDisplayName: {user_display_name_escaped}
             }};
 
-            // Переменные состояния
             let currentTab = 'my-tasks';
             let filterOptions = null;
             let currentOpenFilter = null;
             let filterOptionsData = null;
 
-            // Инициализация страницы
             document.addEventListener('DOMContentLoaded', async () => {{
                 try {{
                     await loadNavigation();
@@ -1750,7 +1558,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                     setupFilters();
                     loadMyTasks();
 
-                    // Закрываем выпадающие списки при клике вне их
                     document.addEventListener('click', (event) => {{
                         const isClickInside = event.target.closest('.compact-filter');
                         if (!isClickInside && currentOpenFilter) {{
@@ -1762,7 +1569,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 }}
             }});
 
-            // Загрузка навигации (та же функция, что и в chat_channel_view.py)
             async function loadNavigation() {{
                 try {{
                     const [userInfoRes, channelsRes, chatsRes] = await Promise.all([
@@ -1784,18 +1590,15 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
 
                     let html = '';
 
-                    // Admin button
                     if (userInfo.is_admin) {{
-                        html += '<div id="admin-btn" onclick="openAdminPanel()" class="nav-item">Admin Panel</div>';
+                        html += '<div id="admin-btn" onclick="openAdminPanel()" class="nav-item">Панель администратора</div>';
                     }}
 
-                    // Profile section
-                    html += '<div id="profile-btn" onclick="openProfile()" class="nav-item">Profile</div>';
-                    html += '<div id="notes-btn" class="nav-item">Notes</div>';
-                    html += '<div id="task-explorer" class="nav-item active">Task Explorer</div>';
+                    html += '<div id="profile-btn" onclick="openProfile()" class="nav-item">Профиль</div>';
+                    html += '<div id="notes-btn" class="nav-item">Заметки</div>';
+                    html += '<div id="task-explorer" class="nav-item active">Обозреватель задач</div>';
 
-                    // Chats section
-                    html += '<div id="chats-toggle" class="nav-item">Chats ▼</div>';
+                    html += '<div id="chats-toggle" class="nav-item">Чаты ▼</div>';
                     html += '<div id="chats-submenu" class="submenu">';
 
                     for (const dept in chats) {{
@@ -1812,8 +1615,7 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
 
                     html += '</div>';
 
-                    // Channels section
-                    html += '<div id="channels-toggle" class="nav-item">Channels ▼</div>';
+                    html += '<div id="channels-toggle" class="nav-item">Каналы ▼</div>';
                     html += '<div id="channels-submenu" class="submenu">';
 
                     for (const group in channels) {{
@@ -1830,8 +1632,7 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
 
                     html += '</div>';
 
-                    // Logout
-                    html += '<div id="logout-btn" class="nav-item" onclick="logout()">Logout</div>';
+                    html += '<div id="logout-btn" class="nav-item" onclick="logout()">Выйти</div>';
 
                     sidebar.innerHTML = html;
 
@@ -1840,9 +1641,7 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 }}
             }}
 
-            // Настройка событий навигации
             function setupNavigationEvents() {{
-                // Toggle для Chats
                 const chatsToggle = document.getElementById('chats-toggle');
                 const chatsSubmenu = document.getElementById('chats-submenu');
                 if (chatsToggle && chatsSubmenu) {{
@@ -1854,7 +1653,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                     chatsSubmenu.style.display = 'flex';
                 }}
 
-                // Toggle для Channels
                 const channelsToggle = document.getElementById('channels-toggle');
                 const channelsSubmenu = document.getElementById('channels-submenu');
                 if (channelsToggle && channelsSubmenu) {{
@@ -1864,7 +1662,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                     channelsSubmenu.style.display = 'flex';
                 }}
 
-                // Notes button
                 const notesBtn = document.getElementById('notes-btn');
                 if (notesBtn) {{
                     notesBtn.addEventListener('click', async () => {{
@@ -1883,7 +1680,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 }}
             }}
 
-            // Функции навигации
             function openAdminPanel() {{
                 window.location.href = '/admin/';
             }}
@@ -1900,19 +1696,16 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 window.location.href = '/channel/' + channelId + '/';
             }}
 
-            // Функция выхода
             function logout() {{
                 // Создаем невидимую форму
                 const form = document.createElement('form');
                 form.method = 'POST';
                 form.action = '/logout';
                                 
-                // Добавляем форму в документ и отправляем
                 document.body.appendChild(form);
                 form.submit();
             }}
 
-            // Настройка вкладок
             function setupTabs() {{
                 const tabs = document.querySelectorAll('.tab');
                 const tabContents = document.querySelectorAll('.tab-content');
@@ -1922,32 +1715,27 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                     tab.addEventListener('click', () => {{
                         const tabId = tab.dataset.tab;
 
-                        // Обновляем активную вкладку
                         tabs.forEach(t => t.classList.remove('active'));
                         tab.classList.add('active');
 
-                        // Показываем/скрываем фильтры
                         if (tabId === 'all-filters') {{
                             filtersPanel.classList.add('active');
                         }} else {{
                             filtersPanel.classList.remove('active');
                         }}
 
-                        // Показываем соответствующий контент
                         tabContents.forEach(content => {{
                             content.classList.remove('active');
                         }});
 
                         document.getElementById(tabId + '-content').classList.add('active');
 
-                        // Загружаем данные для вкладки
                         currentTab = tabId;
                         if (tabId === 'my-tasks') {{
                             loadMyTasks();
                         }} else if (tabId === 'outdated') {{
                             loadOutdatedTasks();
                         }} else if (tabId === 'all-filters') {{
-                            // Для вкладки All Filters показываем только если уже применены фильтры
                             const hasFilters = checkIfFiltersApplied();
                             if (!hasFilters) {{
                                 showEmptyState('all-filters');
@@ -1962,7 +1750,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 const content = document.getElementById(`content-${{filterType}}`);
                 const arrow = header.querySelector('.compact-filter-arrow');
 
-                // Закрываем другие открытые фильтры
                 if (currentOpenFilter && currentOpenFilter !== filterType) {{
                     const prevHeader = document.getElementById(`compact-filter-${{currentOpenFilter}}`).querySelector('.compact-filter-header');
                     const prevContent = document.getElementById(`content-${{currentOpenFilter}}`);
@@ -1973,7 +1760,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                     prevArrow.style.transform = 'rotate(0deg)';
                 }}
 
-                // Переключаем текущий фильтр
                 const isOpening = !header.classList.contains('active');
                 header.classList.toggle('active', isOpening);
                 content.classList.toggle('active', isOpening);
@@ -1981,7 +1767,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
 
                 currentOpenFilter = isOpening ? filterType : null;
 
-                // Если открываем, фокусируемся на поле поиска
                 if (isOpening) {{
                     setTimeout(() => {{
                         const searchInput = content.querySelector('.filter-search-input');
@@ -1992,7 +1777,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 }}
             }}
 
-            // Функция для обновления счетчика выбранных элементов
             function updateFilterCounter(filterType) {{
                 const checkboxes = document.querySelectorAll(`#checkboxes-${{filterType}} input[type="checkbox"]`);
                 const counter = document.getElementById(`counter-${{filterType}}`);
@@ -2005,7 +1789,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                     counter.textContent = selectedCount;
                     counter.classList.add('show');
 
-                    // Обновляем имя фильтра, если выбран только один элемент
                     if (selectedCount === 1) {{
                         const selectedCheckbox = Array.from(checkboxes).find(cb => cb.checked);
                         if (selectedCheckbox) {{
@@ -2022,32 +1805,27 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                     filterName.textContent = getFilterDefaultName(filterType);
                 }}
 
-                // Также обновляем скрытый select для обратной совместимости
                 updateHiddenSelect(filterType);
             }}
 
-            // Функция для получения имени фильтра по умолчанию
             function getFilterDefaultName(filterType) {{
                 const names = {{
-                    'entity-types': 'All Entity Types',
-                    'channels': 'All Channels',
-                    'chats': 'All Chats',
-                    'status': 'All Statuses'
+                    'entity-types': 'Все типы сущностей',
+                    'channels': 'Все каналы',
+                    'chats': 'Все чаты',
+                    'status': 'Все статусы'
                 }};
-                return names[filterType] || `All ${{filterType.replace('-', ' ')}}`;
+                return names[filterType] || `Все ${{filterType.replace('-', ' ')}}`;
             }}
 
-            // Функция для обновления скрытого select элемента
             function updateHiddenSelect(filterType) {{
                 const hiddenSelect = document.getElementById(`filter-${{filterType}}`);
                 const checkboxes = document.querySelectorAll(`#checkboxes-${{filterType}} input[type="checkbox"]`);
 
-                // Очищаем выбранные значения
                 Array.from(hiddenSelect.options).forEach(option => {{
                     option.selected = false;
                 }});
 
-                // Устанавливаем выбранные значения
                 checkboxes.forEach(checkbox => {{
                     if (checkbox.checked) {{
                         const option = Array.from(hiddenSelect.options).find(opt => opt.value === checkbox.value);
@@ -2058,7 +1836,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 }});
             }}
 
-            // Функция для фильтрации опций в выпадающем списке
             function filterOptionsFunc(filterType, searchText) {{
                 const checkboxesContainer = document.getElementById(`checkboxes-${{filterType}}`);
                 const checkboxes = checkboxesContainer.querySelectorAll('.filter-checkbox-item');
@@ -2071,21 +1848,18 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 }});
             }}
 
-            // Функция для выбора всех опций
             function selectAll(filterType) {{
                 const checkboxes = document.querySelectorAll(`#checkboxes-${{filterType}} input[type="checkbox"]`);
                 checkboxes.forEach(cb => cb.checked = true);
                 updateFilterCounter(filterType);
             }}
 
-            // Функция для очистки выбора
             function clearSelection(filterType) {{
                 const checkboxes = document.querySelectorAll(`#checkboxes-${{filterType}} input[type="checkbox"]`);
                 checkboxes.forEach(cb => cb.checked = false);
                 updateFilterCounter(filterType);
             }}
 
-            // Загрузка опций фильтров
             async function loadFilterOptions() {{
                 try {{
                     const response = await fetch('/api/task-explorer/filter-options');
@@ -2093,7 +1867,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
 
                     filterOptionsData = await response.json();
 
-                    // Дедупликация статусов на клиенте для дополнительной защиты
                     if (filterOptionsData && filterOptionsData.statuses) {{
                         const seenStatusIds = new Set();
                         const uniqueStatuses = [];
@@ -2114,11 +1887,9 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 }}
             }}
 
-            // Заполнение фильтров опциями
             function populateFilterOptions() {{
                 if (!filterOptionsData) return;
 
-                // Очищаем контейнеры перед заполнением
                 const filterTypes = ['entity-types', 'channels', 'chats', 'status'];
                 filterTypes.forEach(type => {{
                     const container = document.getElementById(`checkboxes-${{type}}`);
@@ -2126,18 +1897,16 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                     if (container) container.innerHTML = '';
                     if (select) select.innerHTML = '';
                 }});
+                
+                const select1 = document.getElementById(`filter-author`);
+                if (select1) select1.innerHTML = '<option value="">Все авторы</option>';
+                
+                const select2 = document.getElementById(`filter-executor`);
+                if (select2) select2.innerHTML = '<option value="">Все исполнители</option>';
 
-                // Очищаем обычные селекты
-                ['author', 'executor'].forEach(type => {{
-                    const select = document.getElementById(`filter-${{type}}`);
-                    if (select) select.innerHTML = '<option value="">All ' + type.charAt(0).toUpperCase() + type.slice(1) + 's</option>';
-                }});
-
-                // Entity Types - простой список
                 const entityTypesContainer = document.getElementById('checkboxes-entity-types');
                 const entityTypesSelect = document.getElementById('filter-entity-types');
 
-                // Дедупликация на клиенте
                 const uniqueEntityTypes = [];
                 const seenEntityTypes = new Set();
 
@@ -2149,7 +1918,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 }});
 
                 uniqueEntityTypes.forEach(type => {{
-                    // Для компактного фильтра
                     const checkboxItem = document.createElement('div');
                     checkboxItem.className = 'filter-checkbox-item';
                     checkboxItem.innerHTML = `
@@ -2158,21 +1926,18 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                     `;
                     entityTypesContainer.appendChild(checkboxItem);
 
-                    // Для скрытого select (обратная совместимость)
                     const option = document.createElement('option');
                     option.value = type.id;
                     option.textContent = type.name;
                     entityTypesSelect.appendChild(option);
                 }});
 
-                // Channels - объединяем все в один список с указанием группы
                 const channelsContainer = document.getElementById('checkboxes-channels');
                 const channelsSelect = document.getElementById('filter-channels');
                 for (const [group, channels] of Object.entries(filterOptionsData.channels)) {{
                     channels.forEach(channel => {{
                         const displayName = `${{channel.name}} (${{group}})`;
 
-                        // Для компактного фильтра
                         const checkboxItem = document.createElement('div');
                         checkboxItem.className = 'filter-checkbox-item';
                         checkboxItem.innerHTML = `
@@ -2181,7 +1946,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                         `;
                         channelsContainer.appendChild(checkboxItem);
 
-                        // Для скрытого select (обратная совместимость)
                         const option = document.createElement('option');
                         option.value = channel.id;
                         option.textContent = displayName;
@@ -2189,14 +1953,12 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                     }});
                 }}
 
-                // Chats - объединяем все в один список с указанием департамента
                 const chatsContainer = document.getElementById('checkboxes-chats');
                 const chatsSelect = document.getElementById('filter-chats');
                 for (const [dept, chats] of Object.entries(filterOptionsData.chats)) {{
                     chats.forEach(chat => {{
                         const displayName = `${{chat.display_name}} (${{dept}})`;
 
-                        // Для компактного фильтра
                         const checkboxItem = document.createElement('div');
                         checkboxItem.className = 'filter-checkbox-item';
                         checkboxItem.innerHTML = `
@@ -2205,7 +1967,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                         `;
                         chatsContainer.appendChild(checkboxItem);
 
-                        // Для скрытого select (обратная совместимость)
                         const option = document.createElement('option');
                         option.value = chat.chat_id;
                         option.textContent = displayName;
@@ -2213,16 +1974,13 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                     }});
                 }}
 
-                // Status - уже дедуплицировано на бэкенде и на клиенте
                 const statusContainer = document.getElementById('checkboxes-status');
                 const statusSelect = document.getElementById('filter-status');
 
-                // Сортируем статусы по имени для лучшего UX
                 const sortedStatuses = [...filterOptionsData.statuses].sort((a, b) => 
                     a.name.localeCompare(b.name)
                 );
 
-                // Заполняем компактный фильтр
                 sortedStatuses.forEach(status => {{
                     const checkboxItem = document.createElement('div');
                     checkboxItem.className = 'filter-checkbox-item';
@@ -2232,22 +1990,18 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                     `;
                     statusContainer.appendChild(checkboxItem);
 
-                    // Для скрытого select (обратная совместимость)
                     const option = document.createElement('option');
                     option.value = status.id;
                     option.textContent = status.name;
                     statusSelect.appendChild(option);
                 }});
 
-                // Настраиваем обработчики событий для чекбоксов
                 setupCheckboxEvents();
 
-                // Пользователи для Author, Executor, QA (остаются как есть)
                 const authorSelect = document.getElementById('filter-author');
                 const executorSelect = document.getElementById('filter-executor');
                 const qaSelect = document.getElementById('filter-qa');
 
-                // Добавляем "Me" в начало каждого списка
                 [authorSelect, executorSelect, qaSelect].forEach(select => {{
                     const meOption = document.createElement('option');
                     meOption.value = filterOptionsData.current_user_id;
@@ -2255,7 +2009,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                     select.appendChild(meOption);
                 }});
 
-                // Добавляем пользователей по департаментам
                 for (const [dept, users] of Object.entries(filterOptionsData.users)) {{
                     const optgroup = document.createElement('optgroup');
                     optgroup.label = dept.toUpperCase();
@@ -2290,7 +2043,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 }});
             }}
 
-            // Настройка фильтров
             function setupFilters() {{
                 const applyBtn = document.getElementById('apply-filters');
                 const clearBtn = document.getElementById('clear-filters');
@@ -2299,7 +2051,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 clearBtn.addEventListener('click', clearFilters);
             }}
 
-            // Проверка, применены ли фильтры
             function checkIfFiltersApplied() {{
                 const entityTypes = getSelectedValues('filter-entity-types');
                 const channels = getSelectedValues('filter-channels');
@@ -2326,19 +2077,16 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                        createdTo;
             }}
 
-            // Получение выбранных значений из мультиселекта
             function getSelectedValues(selectId) {{
                 const select = document.getElementById(selectId);
                 return Array.from(select.selectedOptions).map(option => option.value);
             }}
 
-            // Применение фильтров
             async function applyFilters() {{
                 if (currentTab !== 'all-filters') return;
 
                 showLoading('all-filters');
 
-                // Собираем параметры фильтров
                 const params = new URLSearchParams();
 
                 const entityTypes = getSelectedValues('filter-entity-types');
@@ -2353,7 +2101,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 const createdFrom = document.getElementById('filter-created-from').value;
                 const createdTo = document.getElementById('filter-created-to').value;
 
-                // Добавляем параметры, если они есть
                 if (entityTypes.length > 0) {{
                     entityTypes.forEach(type => params.append('entity_types', type));
                 }}
@@ -2391,32 +2138,26 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 }}
             }}
 
-            // Очистка фильтров
             function clearFilters() {{
-                // Очищаем компактные фильтры
                 const filterTypes = ['entity-types', 'channels', 'chats', 'status'];
                 filterTypes.forEach(filterType => {{
                     clearSelection(filterType);
                 }});
 
-                // Очищаем обычные селекты
                 ['author', 'executor', 'qa'].forEach(filter => {{
                     const select = document.getElementById(`filter-${{filter}}`);
                     if (select) select.value = '';
                 }});
 
-                // Очищаем date inputs
                 document.querySelectorAll('.date-input').forEach(input => {{
                     input.value = '';
                 }});
 
-                // Если на вкладке All Filters, показываем пустое состояние
                 if (currentTab === 'all-filters') {{
                     showEmptyState('all-filters');
                 }}
             }}
 
-            // Загрузка задач пользователя
             async function loadMyTasks() {{
                 if (currentTab !== 'my-tasks') return;
 
@@ -2434,7 +2175,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 }}
             }}
 
-            // Загрузка просроченных задач
             async function loadOutdatedTasks() {{
                 if (currentTab !== 'outdated') return;
 
@@ -2452,7 +2192,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 }}
             }}
 
-            // Показать состояние загрузки
             function showLoading(tabId) {{
                 document.getElementById(tabId + '-loading').style.display = 'block';
                 document.getElementById(tabId + '-list').style.display = 'none';
@@ -2463,7 +2202,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 }}
             }}
 
-            // Показать пустое состояние
             function showEmptyState(tabId, message = null) {{
                 const emptyState = document.getElementById(tabId + '-empty');
                 const loading = document.getElementById(tabId + '-loading');
@@ -2488,7 +2226,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 }}
             }}
 
-            // Отображение списка entity
             function displayEntities(tabId, entities) {{
                 const container = document.getElementById(tabId + '-list');
                 const loading = document.getElementById(tabId + '-loading');
@@ -2497,11 +2234,11 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 if (entities.length === 0) {{
                     if (emptyState) {{
                         if (tabId === 'my-tasks') {{
-                            emptyState.innerHTML = '<div class="empty-state-icon">✅</div><h3>No tasks found</h3><p>You have no active tasks assigned to you</p>';
+                            emptyState.innerHTML = '<div class="empty-state-icon">✅</div><h3>Незакрытые сущности не найдены</h3><p>На вас нет назначенных активных сущностей</p>';
                         }} else if (tabId === 'outdated') {{
-                            emptyState.innerHTML = '<div class="empty-state-icon">⏰</div><h3>No outdated tasks</h3><p>Great! All tasks are up to date</p>';
+                            emptyState.innerHTML = '<div class="empty-state-icon">⏰</div><h3>Просроченные сущности не найдены</h3><p>Отлично! Ничто не просрочено</p>';
                         }} else {{
-                            emptyState.innerHTML = '<div class="empty-state-icon">🔍</div><h3>No tasks found</h3><p>Try adjusting your filters</p>';
+                            emptyState.innerHTML = '<div class="empty-state-icon">🔍</div><h3>Сущности не найдены</h3><p>Попробуйте изменить условия поиска</p>';
                         }}
                         emptyState.style.display = 'block';
                     }}
@@ -2519,7 +2256,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 let html = '';
 
                 entities.forEach(entity => {{
-                    // Определяем, просрочена ли задача
                     const isOutdated = tabId === 'outdated' || 
                         (entity.deadline && new Date(entity.deadline) < new Date());
 
@@ -2531,70 +2267,63 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
 
                     html += '<div class="entity-meta">';
                     html += '<div class="entity-meta-item">';
-                    html += '<strong>Author:</strong> ' + escapeHtml(entity.author_display_name);
+                    html += '<strong>Автор:</strong> ' + escapeHtml(entity.author_display_name);
                     html += '</div>';
 
                     if (entity.source_name) {{
                         html += '<div class="entity-meta-item">';
-                        html += '<strong>Source:</strong> ';
+                        html += '<strong>Откуда:</strong> ';
                         html += '<span class="entity-source">' + escapeHtml(entity.source_name) + '</span>';
                         html += '</div>';
                     }}
 
                     html += '<div class="entity-meta-item">';
-                    html += '<strong>Created:</strong> ' + new Date(entity.created_at).toLocaleString();
+                    html += '<strong>Создано:</strong> ' + new Date(entity.created_at).toLocaleString();
                     html += '</div>';
 
                     if (entity.deadline) {{
                         html += '<div class="entity-meta-item">';
-                        html += '<strong>Deadline:</strong> ' + new Date(entity.deadline).toLocaleString();
+                        html += '<strong>Закрыть до:</strong> ' + new Date(entity.deadline).toLocaleString();
                         html += '</div>';
                     }}
                     html += '</div>';
 
-                    // Отображаем body, если есть
                     if (entity.body) {{
                         html += '<div class="entity-body">' + escapeHtml(entity.body) + '</div>';
                     }}
 
-                    // Детали entity
                     html += '<div class="entity-details">';
 
-                    // Priority
                     if (entity.priority !== undefined) {{
                         html += '<div class="entity-field">';
-                        html += '<span class="entity-field-label">Priority:</span>';
+                        html += '<span class="entity-field-label">Приоритет:</span>';
                         html += '<span class="entity-priority">' + entity.priority + '</span>';
                         html += '</div>';
                     }}
 
-                    // Severity
                     if (entity.severity !== undefined) {{
                         html += '<div class="entity-field">';
-                        html += '<span class="entity-field-label">Severity:</span>';
+                        html += '<span class="entity-field-label">Приоритет:</span>';
                         html += '<span class="entity-severity">' + entity.severity + '</span>';
                         html += '</div>';
                     }}
 
-                    // Status
                     if (entity.status) {{
                         html += '<div class="entity-field">';
-                        html += '<span class="entity-field-label">Status:</span>';
+                        html += '<span class="entity-field-label">Статус:</span>';
                         html += '<span class="entity-status status-' + entity.status + '">';
                         html += entity.status.replace('_', ' ').replace(/\\b\\w/g, l => l.toUpperCase());
                         html += '</span>';
                         html += '</div>';
                     }}
 
-                    // Executor
                     if (entity.executor) {{
                         html += '<div class="entity-field">';
-                        html += '<span class="entity-field-label">Executor:</span>';
+                        html += '<span class="entity-field-label">Исполнитель:</span>';
                         html += escapeHtml(entity.executor);
                         html += '</div>';
                     }}
 
-                    // QA
                     if (entity.qa) {{
                         html += '<div class="entity-field">';
                         html += '<span class="entity-field-label">QA:</span>';
@@ -2602,35 +2331,31 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                         html += '</div>';
                     }}
 
-                    // Reproducible
                     if (entity.reproducible !== undefined) {{
                         html += '<div class="entity-field">';
-                        html += '<span class="entity-field-label">Reproducible:</span>';
-                        html += entity.reproducible ? 'Yes' : 'No';
+                        html += '<span class="entity-field-label">Воспроизводится ли:</span>';
+                        html += entity.reproducible ? 'Да' : 'Нет';
                         html += '</div>';
                     }}
 
-                    // Read count для Info
                     if (entity.type === 'info') {{
                         html += '<div class="entity-field">';
-                        html += '<span class="entity-field-label">Read:</span>';
+                        html += '<span class="entity-field-label">Прочитано:</span>';
                         html += (entity.read_count || 0) + '/' + (entity.required_users.length || 0);
                         html += '</div>';
                     }}
 
                     html += '</div>';
 
-                    // Кнопки действий
                     html += '<div class="entity-actions">';
 
-                    // Кнопка перехода к entity
                     if (entity.source_type === 'channel') {{
                         html += '<button class="entity-action-btn" onclick="openChannel(\\'' + entity.source_id + '\\')">';
-                        html += 'Go to Channel';
+                        html += 'Перейти в канал';
                         html += '</button>';
                     }} else if (entity.source_type === 'chat') {{
                         html += '<button class="entity-action-btn" onclick="openDirectChat(\\'' + entity.source_id + '\\')">';
-                        html += 'Go to Chat';
+                        html += 'Перейти в чат';
                         html += '</button>';
                     }}
 
@@ -2645,7 +2370,6 @@ def generate_task_explorer_html(user: User) -> HTMLResponse:
                 if (emptyState) emptyState.style.display = 'none';
             }}
 
-            // Вспомогательная функция для экранирования HTML
             function escapeHtml(text) {{
                 if (!text) return '';
                 const div = document.createElement('div');

@@ -28,12 +28,10 @@ from src.app.storage.models import (
 
 @router.get('/chat/{chat_id}/', response_class=HTMLResponse)
 async def chat_page(chat_id: str, user_login=Depends(require_auth), session: AsyncSession = Depends(get_session)):
-    # Получаем текущего пользователя
     user_query = select(User).where(User.login == user_login)
     user_result = await session.execute(user_query)
     user = user_result.scalar_one()
 
-    # Получаем чат с проверкой доступа
     chat_query = select(DirectChat).where(DirectChat.id == chat_id).options(selectinload(DirectChat.users))
     chat_result = await session.execute(chat_query)
     chat = chat_result.scalar_one_or_none()
@@ -41,30 +39,24 @@ async def chat_page(chat_id: str, user_login=Depends(require_auth), session: Asy
     if not chat:
         raise HTTPException(status_code=404, detail='Chat not found')
 
-    # Проверяем доступ
     if user not in chat.users:
         raise HTTPException(status_code=403, detail='Access denied')
 
-    # Получаем display_name для чата
-    chat_title = 'Notes' if chat.is_self_chat else ''
+    chat_title = 'Заметки' if chat.is_self_chat else ''
     if not chat.is_self_chat:
         other_users = [u for u in chat.users if u.id != user.id]
         if other_users:
             chat_title = other_users[0].display_name
 
-    # Получаем историю чата
     history = await get_chat_history(chat_id, user.id, session)
 
-    # Получаем доступные типы Entity
     if chat.is_self_chat:
         available_entities = ['task', 'action_point']
     else:
-        # Для обычных чатов показываем все типы
         available_entities = ['question', 'defect', 'task', 'info', 'proposal', 'action_point']
 
     chat_users = chat.users
 
-    # Генерируем HTML страницу
     return generate_chat_page_html(
         chat_id=chat_id,
         chat_title=chat_title,
@@ -78,12 +70,10 @@ async def chat_page(chat_id: str, user_login=Depends(require_auth), session: Asy
 
 @router.get('/channel/{channel_id}/', response_class=HTMLResponse)
 async def channel_page(channel_id: str, user_login=Depends(require_auth), session: AsyncSession = Depends(get_session)):
-    # Получаем текущего пользователя
     user_query = select(User).where(User.login == user_login)
     user_result = await session.execute(user_query)
     user = user_result.scalar_one()
 
-    # Получаем канал с проверкой доступа
     channel_query = select(Channel).where(Channel.id == channel_id)
     channel_result = await session.execute(channel_query)
     channel = channel_result.scalar_one_or_none()
@@ -91,15 +81,12 @@ async def channel_page(channel_id: str, user_login=Depends(require_auth), sessio
     if not channel:
         raise HTTPException(status_code=404, detail='Channel not found')
 
-    # Проверяем доступ
     user_channel_ids = [ch.id for ch in user.channels]
     if channel.id not in user_channel_ids:
         raise HTTPException(status_code=403, detail='Access denied')
 
-    # Получаем историю канала
     history = await get_channel_history(channel_id, user.id, session)
 
-    # Получаем доступные типы Entity из канала
     available_entities = channel.allowed_entity_types or [
         'question',
         'defect',
@@ -111,7 +98,6 @@ async def channel_page(channel_id: str, user_login=Depends(require_auth), sessio
 
     chat_users = channel.users
 
-    # Генерируем HTML страницу
     return generate_chat_page_html(
         chat_id=channel_id,
         chat_title=channel.name,
@@ -125,7 +111,6 @@ async def channel_page(channel_id: str, user_login=Depends(require_auth), sessio
 
 async def get_chat_history(chat_id: str, user_id: str, session: AsyncSession) -> list[dict[str, Any]]:
     """Получаем историю чата (Topic и Entity)"""
-    # Получаем все Topic в чате
     topics_query = (
         select(Topic)
         .where(Topic.direct_chat_id == chat_id)
@@ -135,7 +120,6 @@ async def get_chat_history(chat_id: str, user_id: str, session: AsyncSession) ->
     topics_result = await session.execute(topics_query)
     topics = topics_result.scalars().all()
 
-    # Получаем все Entity в чате с загрузкой всех связанных данных
     entities_query = (
         select(Entity)
         .where(Entity.direct_chat_id == chat_id)
@@ -143,13 +127,10 @@ async def get_chat_history(chat_id: str, user_id: str, session: AsyncSession) ->
             selectinload(Entity.author),
             selectinload(Entity.comments),
             selectinload(Entity.question),
-            # Для defect используем joinedload для executor и qa
             selectinload(Entity.defect).options(joinedload(DefectEntity.executor), joinedload(DefectEntity.qa)),
-            # Для task используем joinedload для executor и qa
             selectinload(Entity.task).options(joinedload(TaskEntity.executor), joinedload(TaskEntity.qa)),
             selectinload(Entity.info).selectinload(InfoEntity.required_users).selectinload(InfoRequiredUser.user),
             selectinload(Entity.proposal),
-            # Для action_point используем joinedload для executor
             selectinload(Entity.action_point).options(joinedload(ActionPointEntity.executor)),
         )
         .order_by(Entity.created_at)
@@ -175,10 +156,8 @@ async def get_chat_history(chat_id: str, user_id: str, session: AsyncSession) ->
                 'acknowledged_at': ack.acknowledged_at.isoformat() if ack.acknowledged_at else None,
             }
 
-    # Объединяем и сортируем по времени создания
     history = []
 
-    # Обрабатываем Topic
     for topic in topics:
         history.append({
             'type': 'topic',
@@ -190,7 +169,6 @@ async def get_chat_history(chat_id: str, user_id: str, session: AsyncSession) ->
             'comment_count': len(topic.comments) if topic.comments else 0,
         })
 
-    # Обрабатываем Entity
     for entity in entities:
         entity_data = {
             'type': 'entity',
@@ -204,7 +182,6 @@ async def get_chat_history(chat_id: str, user_id: str, session: AsyncSession) ->
             'comment_count': len(entity.comments) if entity.comments else 0,
         }
 
-        # Добавляем информацию о конкретном типе Entity
         if entity.type == EntityTypeEnum.question and entity.question:
             entity_data.update({
                 'body': entity.question.body,
@@ -242,7 +219,6 @@ async def get_chat_history(chat_id: str, user_id: str, session: AsyncSession) ->
                     user_data = {'id': str(ru.user.id), 'display_name': ru.user.display_name}
                     required_users_list.append(user_data)
 
-                    # Проверяем, есть ли подтверждение в Acknowledge
                     entity_acknowledges = acknowledges_dict.get(str(entity.id), {})
                     user_acknowledge = entity_acknowledges.get(str(ru.user.id))
 
@@ -278,8 +254,6 @@ async def get_chat_history(chat_id: str, user_id: str, session: AsyncSession) ->
                 'deadline': entity.action_point.deadline.isoformat() if entity.action_point.deadline else None,
             })
 
-        # Добавляем пустые поля для всех типов Entity
-        # Это гарантирует, что в JS мы всегда сможем обратиться к полям
         if entity.type == EntityTypeEnum.question:
             entity_data.setdefault('body', None)
             entity_data.setdefault('priority', None)
@@ -310,7 +284,6 @@ async def get_chat_history(chat_id: str, user_id: str, session: AsyncSession) ->
 
         history.append(entity_data)
 
-    # Сортируем всю историю по времени создания
     history.sort(key=lambda x: x['created_at'] if x['created_at'] else '')
 
     return history
@@ -318,7 +291,6 @@ async def get_chat_history(chat_id: str, user_id: str, session: AsyncSession) ->
 
 async def get_channel_history(channel_id: str, user_id: str, session: AsyncSession) -> list[dict[str, Any]]:
     """Получаем историю канала (Topic и Entity)"""
-    # Получаем все Topic в канале
     topics_query = (
         select(Topic)
         .where(Topic.channel_id == channel_id)
@@ -328,7 +300,6 @@ async def get_channel_history(channel_id: str, user_id: str, session: AsyncSessi
     topics_result = await session.execute(topics_query)
     topics = topics_result.scalars().all()
 
-    # Получаем все Entity в канале с загрузкой всех связанных данных
     entities_query = (
         select(Entity)
         .where(Entity.channel_id == channel_id)
@@ -336,13 +307,10 @@ async def get_channel_history(channel_id: str, user_id: str, session: AsyncSessi
             selectinload(Entity.author),
             selectinload(Entity.comments),
             selectinload(Entity.question),
-            # Для defect используем joinedload для executor и qa
             selectinload(Entity.defect).options(joinedload(DefectEntity.executor), joinedload(DefectEntity.qa)),
-            # Для task используем joinedload для executor и qa
             selectinload(Entity.task).options(joinedload(TaskEntity.executor), joinedload(TaskEntity.qa)),
             selectinload(Entity.info).selectinload(InfoEntity.required_users).selectinload(InfoRequiredUser.user),
             selectinload(Entity.proposal),
-            # Для action_point используем joinedload для executor
             selectinload(Entity.action_point).options(joinedload(ActionPointEntity.executor)),
         )
         .order_by(Entity.created_at)
@@ -368,10 +336,8 @@ async def get_channel_history(channel_id: str, user_id: str, session: AsyncSessi
                 'acknowledged_at': ack.acknowledged_at.isoformat() if ack.acknowledged_at else None,
             }
 
-    # Объединяем и сортируем по времени создания
     history = []
 
-    # Обрабатываем Topic
     for topic in topics:
         history.append({
             'type': 'topic',
@@ -383,7 +349,6 @@ async def get_channel_history(channel_id: str, user_id: str, session: AsyncSessi
             'comment_count': len(topic.comments) if topic.comments else 0,
         })
 
-    # Обрабатываем Entity
     for entity in entities:
         entity_data = {
             'type': 'entity',
@@ -397,7 +362,6 @@ async def get_channel_history(channel_id: str, user_id: str, session: AsyncSessi
             'comment_count': len(entity.comments) if entity.comments else 0,
         }
 
-        # Добавляем информацию о конкретном типе Entity
         if entity.type == EntityTypeEnum.question and entity.question:
             entity_data.update({
                 'body': entity.question.body,
@@ -435,7 +399,6 @@ async def get_channel_history(channel_id: str, user_id: str, session: AsyncSessi
                     user_data = {'id': str(ru.user.id), 'display_name': ru.user.display_name}
                     required_users_list.append(user_data)
 
-                    # Проверяем, есть ли подтверждение в Acknowledge
                     entity_acknowledges = acknowledges_dict.get(str(entity.id), {})
                     user_acknowledge = entity_acknowledges.get(str(ru.user.id))
 
@@ -470,8 +433,6 @@ async def get_channel_history(channel_id: str, user_id: str, session: AsyncSessi
                 'deadline': entity.action_point.deadline.isoformat() if entity.action_point.deadline else None,
             })
 
-        # Добавляем пустые поля для всех типов Entity
-        # Это гарантирует, что в JS мы всегда сможем обратиться к полям
         if entity.type == EntityTypeEnum.question:
             entity_data.setdefault('body', None)
             entity_data.setdefault('priority', None)
@@ -502,7 +463,6 @@ async def get_channel_history(channel_id: str, user_id: str, session: AsyncSessi
 
         history.append(entity_data)
 
-    # Сортируем всю историю по времени создания
     history.sort(key=lambda x: x['created_at'] if x['created_at'] else '')
 
     return history
@@ -524,14 +484,12 @@ def generate_chat_page_html(
         [{'id': str(user.id), 'display_name': user.display_name} for user in chat_users], ensure_ascii=False
     )
 
-    # Экранируем данные для безопасной вставки в JavaScript
     chat_title_escaped = json.dumps(chat_title)
     user_id_escaped = json.dumps(str(user.id))
     user_display_name_escaped = json.dumps(user.display_name)
     chat_id_escaped = json.dumps(chat_id)
     chat_users_escaped = chat_users_json
 
-    # Основная часть HTML с исправленным JavaScript
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -540,7 +498,6 @@ def generate_chat_page_html(
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-            /* Reset box-sizing for all elements */
             *, *::before, *::after {{
                 box-sizing: border-box;
             }}
@@ -632,7 +589,7 @@ def generate_chat_page_html(
                 justify-content: space-between;
                 align-items: center;
                 margin-bottom: 8px;
-                flex-wrap: wrap; /* Позволяет переноситься на мобильных */
+                flex-wrap: wrap;
                 gap: 10px;
             }}
             .author {{
@@ -655,8 +612,8 @@ def generate_chat_page_html(
             }}
             .message-content {{
                 margin-bottom: 5px;
-                white-space: pre-wrap; /* Сохраняет переносы строк */
-                word-wrap: break-word; /* Переносит длинные слова */
+                white-space: pre-wrap;
+                word-wrap: break-word;
                 line-height: 1.5;
             }}
             
@@ -666,8 +623,8 @@ def generate_chat_page_html(
                 background-color: #eef2ff;
                 border-radius: 5px;
                 font-size: 14px;
-                white-space: pre-wrap; /* Сохраняет переносы строк */
-                word-wrap: break-word; /* Переносит длинные слова */
+                white-space: pre-wrap;
+                word-wrap: break-word;
                 line-height: 1.4;
             }}
             .comment-btn {{
@@ -699,9 +656,9 @@ def generate_chat_page_html(
             }}
             .message-actions {{
                 display: flex;
-                gap: 8px; /* Отступы между кнопками */
+                gap: 8px;
                 align-items: center;
-                flex-wrap: wrap; /* Позволяет кнопкам переноситься на мобильных */
+                flex-wrap: wrap;
                 justify-content: flex-end;
             }}
             .message-form {{
@@ -718,7 +675,7 @@ def generate_chat_page_html(
                 border-radius: 5px;
                 resize: none;
                 font-family: inherit;
-                white-space: pre-wrap; /* Сохраняет переносы строк при вводе */
+                white-space: pre-wrap;
                 word-wrap: break-word;
             }}
             .send-button {{
@@ -756,7 +713,6 @@ def generate_chat_page_html(
                 display: none;
             }}
 
-            /* Модальное окно */
             .modal-overlay {{
                 position: fixed;
                 top: 0;
@@ -774,11 +730,11 @@ def generate_chat_page_html(
                 border-radius: 8px;
                 padding: 20px;
                 max-width: 500px;
-                width: calc(100% - 40px); /* Responsive width */
+                width: calc(100% - 40px);
                 max-height: 90vh;
                 overflow-y: auto;
                 box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
-                margin: 20px; /* Add margin for mobile */
+                margin: 20px;
             }}
             .modal-header {{
                 display: flex;
@@ -811,13 +767,12 @@ def generate_chat_page_html(
             }}
             .form-input, .form-textarea, .form-select {{
                 width: 100%;
-                max-width: 100%; /* Prevent overflow */
+                max-width: 100%;
                 padding: 8px 12px;
                 border: 1px solid #ddd;
                 border-radius: 4px;
                 font-family: inherit;
-                font-size: 14px;
-                box-sizing: border-box; /* Include padding in width */
+                font-size: 14px; /* Include padding in width */
             }}
             .form-textarea {{
                 min-height: 80px;
@@ -859,7 +814,6 @@ def generate_chat_page_html(
                 background-color: #46d975;
             }}
 
-            /* Дровер для комментариев */
             .drawer-overlay {{
                 position: fixed;
                 top: 0;
@@ -948,12 +902,12 @@ def generate_chat_page_html(
             }}
             .drawer-message .message-content {{
                 margin-top: 8px;
-                white-space: pre-wrap; /* Важно для сохранения форматирования */
+                white-space: pre-wrap;
                 word-wrap: break-word;
                 line-height: 1.5;
                 word-break: break-word;
-                overflow-wrap: break-word; /* Дополнительное свойство для переноса длинных слов */
-                max-width: 100%; /* Ограничиваем ширину */
+                overflow-wrap: break-word;
+                max-width: 100%;
             }}
             .edit-btn {{
                 padding: 4px 10px;
@@ -1002,23 +956,17 @@ def generate_chat_page_html(
             }}
             .mark-read-btn:hover {{
                 background-color: #0b7dda;
-            }}
-            
+            }}  
             .message.unread-info {{
                 background-color: rgba(255, 200, 200, 0.2);
                 border-left: 3px solid #f04747;
             }}
-            
-            /* Модальное окно для редактирования Entity */
             #edit-entity-modal-overlay {{
                 z-index: 1001;
-            }}
-            
+            }}            
             .status-group {{
                 display: none;
             }}
-
-            /* Responsive fixes for modals */
             @media (max-width: 600px) {{
                 .modal {{
                     width: calc(100% - 30px);
@@ -1030,8 +978,6 @@ def generate_chat_page_html(
                     padding: 6px 10px;
                 }}
             }}
-
-            /* Fix for required users list */
             #required-users-list, #edit-required-users-list {{
                 max-height: 200px;
                 overflow-y: auto;
@@ -1057,171 +1003,152 @@ def generate_chat_page_html(
     </head>
     <body>
         <div class="container">
-            <div class="sidebar" id="sidebar">
-                <!-- Навигация будет загружена через JavaScript -->
-            </div>
+            <div class="sidebar" id="sidebar"></div>
 
             <div class="main-content">
                 <div class="header">
                     <h2>{chat_title}</h2>
-                    <div class="entity-types" id="entity-types">
-                        <!-- Кнопки для типов Entity будут загружены через JavaScript -->
-                    </div>
+                    <div class="entity-types" id="entity-types"></div>
                 </div>
 
-                <div class="chat-area" id="chat-area">
-                    <!-- История будет загружена через JavaScript -->
-                </div>
+                <div class="chat-area" id="chat-area"></div>
 
                 <div class="message-form">
                     <textarea 
                         class="message-input" 
                         id="message-input" 
-                        placeholder="Type your message here..." 
+                        placeholder="Начните писать сообщение..." 
                         rows="3"
                     ></textarea>
-                    <button class="send-button" id="send-button">Send</button>
+                    <button class="send-button" id="send-button">Отправить</button>
                 </div>
             </div>
         </div>
 
-        <!-- Модальное окно для создания Entity -->
         <div class="modal-overlay" id="entity-modal-overlay">
             <div class="modal" id="entity-modal">
                 <div class="modal-header">
-                    <div class="modal-title" id="modal-title">Create Entity</div>
+                    <div class="modal-title" id="modal-title">Создать сущность</div>
                     <button class="close-modal" id="close-modal">&times;</button>
                 </div>
                 <form id="entity-form">
                     <div class="form-group">
-                        <label class="form-label" for="entity-title">Title</label>
+                        <label class="form-label" for="entity-title">Тема</label>
                         <input type="text" class="form-input" id="entity-title" required>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label" for="entity-body">Body</label>
+                        <label class="form-label" for="entity-body">Описание</label>
                         <textarea class="form-textarea" id="entity-body" rows="4" required></textarea>
                     </div>
 
-                    <!-- Общие поля для всех Entity -->
                     <div class="form-group" id="priority-group" style="display: none;">
-                        <label class="form-label" for="entity-priority">Priority</label>
+                        <label class="form-label" for="entity-priority">Приоритет</label>
                         <input type="number" class="form-input" id="entity-priority" min="1" max="10" value="5">
                     </div>
 
                     <div class="form-group" id="severity-group" style="display: none;">
-                        <label class="form-label" for="entity-severity">Severity</label>
+                        <label class="form-label" for="entity-severity">Критичность</label>
                         <input type="number" class="form-input" id="entity-severity" min="1" max="10" value="5">
                     </div>
 
                     <div class="form-group" id="reproducible-group" style="display: none;">
                         <label class="form-label">
                             <input type="checkbox" class="form-checkbox" id="entity-reproducible">
-                            Reproducible
+                            Воспроизводится ли
                         </label>
                     </div>
 
                     <div class="form-group" id="deadline-group" style="display: none;">
-                        <label class="form-label" for="entity-deadline">Deadline</label>
+                        <label class="form-label" for="entity-deadline">Закрыть до</label>
                         <input type="datetime-local" class="form-input" id="entity-deadline">
                     </div>
 
                     <div class="form-group" id="executor-group" style="display: none;">
-                        <label class="form-label" for="entity-executor">Executor</label>
-                        <select class="form-select" id="entity-executor">
-                            <!-- Заполнится через JavaScript -->
-                        </select>
+                        <label class="form-label" for="entity-executor">Исполнитель</label>
+                        <select class="form-select" id="entity-executor"></select>
                     </div>
 
                     <div class="form-group" id="qa-group" style="display: none;">
                         <label class="form-label" for="entity-qa">QA</label>
-                        <select class="form-select" id="entity-qa">
-                            <!-- Заполнится через JavaScript -->
-                        </select>
+                        <select class="form-select" id="entity-qa"></select>
                     </div>
 
                     <div class="form-group" id="required-users-group" style="display: none;">
-                        <label class="form-label">Required Users</label>
-                        <div id="required-users-list">
-                            <!-- Список пользователей с чекбоксами -->
-                        </div>
+                        <label class="form-label">Должны ознакомиться</label>
+                        <div id="required-users-list"></div>
                     </div>
 
                     <div class="modal-footer">
-                        <button type="button" class="cancel-btn" id="cancel-modal">Cancel</button>
-                        <button type="submit" class="create-btn">Create</button>
+                        <button type="button" class="cancel-btn" id="cancel-modal">Отмена</button>
+                        <button type="submit" class="create-btn">Создать</button>
                     </div>
                 </form>
             </div>
         </div>
 
-        <!-- Дровер для комментариев -->
         <div class="drawer-overlay" id="comments-drawer-overlay">
             <div class="drawer" id="comments-drawer">
                 <div class="drawer-header">
-                    <div class="drawer-title">Comments</div>
+                    <div class="drawer-title">Комментарии</div>
                     <button class="close-drawer" id="close-drawer">&times;</button>
                 </div>
-                <div class="drawer-content" id="drawer-content">
-                    <!-- Исходное сообщение и комментарии будут загружены через JavaScript -->
-                </div>
+                <div class="drawer-content" id="drawer-content"></div>
                 <div class="drawer-form">
                     <textarea 
                         class="message-input" 
                         id="comment-input" 
-                        placeholder="Write a comment..." 
+                        placeholder="Начните вводить текст комментария..." 
                         rows="2"
                     ></textarea>
-                    <button class="send-button" id="send-comment">Send</button>
+                    <button class="send-button" id="send-comment">Отправить</button>
                 </div>
             </div>
         </div>
         
-        <!-- Модальное окно для редактирования Entity -->
         <div class="modal-overlay" id="edit-entity-modal-overlay">
             <div class="modal" id="edit-entity-modal">
                 <div class="modal-header">
-                    <div class="modal-title" id="edit-modal-title">Edit Entity</div>
+                    <div class="modal-title" id="edit-modal-title">Редактирование сущности</div>
                     <button class="close-modal" id="edit-close-modal">&times;</button>
                 </div>
                 <form id="edit-entity-form">
                     <input type="hidden" id="edit-entity-id">
                     
                     <div class="form-group">
-                        <label class="form-label" for="edit-entity-title">Title</label>
+                        <label class="form-label" for="edit-entity-title">Тема</label>
                         <input type="text" class="form-input" id="edit-entity-title" required>
                     </div>
         
                     <div class="form-group">
-                        <label class="form-label" for="edit-entity-body">Body</label>
+                        <label class="form-label" for="edit-entity-body">Описание</label>
                         <textarea class="form-textarea" id="edit-entity-body" rows="4" required></textarea>
                     </div>
         
-                    <!-- Общие поля для всех Entity -->
                     <div class="form-group" id="edit-priority-group" style="display: none;">
-                        <label class="form-label" for="edit-entity-priority">Priority</label>
+                        <label class="form-label" for="edit-entity-priority">Приоритет</label>
                         <input type="number" class="form-input" id="edit-entity-priority" min="1" max="10" value="5">
                     </div>
         
                     <div class="form-group" id="edit-severity-group" style="display: none;">
-                        <label class="form-label" for="edit-entity-severity">Severity</label>
+                        <label class="form-label" for="edit-entity-severity">Критичность</label>
                         <input type="number" class="form-input" id="edit-entity-severity" min="1" max="10" value="5">
                     </div>
         
                     <div class="form-group" id="edit-reproducible-group" style="display: none;">
                         <label class="form-label">
                             <input type="checkbox" class="form-checkbox" id="edit-entity-reproducible">
-                            Reproducible
+                            Воспроизводится ли
                         </label>
                     </div>
         
                     <div class="form-group" id="edit-deadline-group" style="display: none;">
-                        <label class="form-label" for="edit-entity-deadline">Deadline</label>
+                        <label class="form-label" for="edit-entity-deadline">Закрыть до</label>
                         <input type="datetime-local" class="form-input" id="edit-entity-deadline">
                     </div>
         
                     <div class="form-group" id="edit-executor-group" style="display: none;">
-                        <label class="form-label" for="edit-entity-executor">Executor</label>
+                        <label class="form-label" for="edit-entity-executor">Исполнитель</label>
                         <select class="form-select" id="edit-entity-executor">
                             <!-- Заполнится через JavaScript -->
                         </select>
@@ -1235,15 +1162,12 @@ def generate_chat_page_html(
                     </div>
         
                     <div class="form-group" id="edit-required-users-group" style="display: none;">
-                        <label class="form-label">Required Users</label>
-                        <div id="edit-required-users-list">
-                            <!-- Список пользователей с чекбоксами -->
-                        </div>
+                        <label class="form-label">Должны ознакомиться</label>
+                        <div id="edit-required-users-list"></div>
                     </div>
         
-                    <!-- Поле статуса (показывается только для типов, у которых есть статус) -->
                     <div class="form-group status-group" id="edit-status-group">
-                        <label class="form-label" for="edit-entity-status">Status</label>
+                        <label class="form-label" for="edit-entity-status">Статус</label>
                         <select class="form-select" id="edit-entity-status">
                             <option value="created">Created</option>
                             <option value="in_progress">In Progress</option>
@@ -1254,28 +1178,24 @@ def generate_chat_page_html(
                     </div>
         
                     <div class="modal-footer">
-                        <button type="button" class="cancel-btn" id="edit-cancel-modal">Cancel</button>
-                        <button type="submit" class="create-btn">Save Changes</button>
+                        <button type="button" class="cancel-btn" id="edit-cancel-modal">Отменить</button>
+                        <button type="submit" class="create-btn">Сохранить изменения</button>
                     </div>
                 </form>
             </div>
         </div>
     
-        <!-- Дровер для отображения информации о прочтении Info -->
         <div class="drawer-overlay" id="info-reads-drawer-overlay">
             <div class="drawer" id="info-reads-drawer">
                 <div class="drawer-header">
-                    <div class="drawer-title">Info Read Status</div>
+                    <div class="drawer-title">Информация о статусах прочтения</div>
                     <button class="close-drawer" id="close-info-reads-drawer">&times;</button>
                 </div>
-                <div class="drawer-content" id="info-reads-content">
-                    <!-- Содержимое будет загружено через JavaScript -->
-                </div>
+                <div class="drawer-content" id="info-reads-content"></div>
             </div>
         </div>
 
         <script>
-            // Сохраняем данные для использования в JavaScript
             const chatData = {{
                 chatId: {chat_id_escaped},
                 chatTitle: {chat_title_escaped},
@@ -1287,7 +1207,6 @@ def generate_chat_page_html(
                 chatUsers: {chat_users_escaped}
             }};
 
-            // Переменные для состояния
             let currentThreadId = null;
             let currentThreadType = null;
             let allUsers = [];
@@ -1329,7 +1248,6 @@ def generate_chat_page_html(
                 }};
             }}
 
-            // Обработчик сообщений WebSocket
             function handleWebSocketMessage(message) {{
                 switch(message.event) {{
                     case 'entity_created':
@@ -1350,7 +1268,6 @@ def generate_chat_page_html(
                 }}
             }}
 
-            // Обработчики для каждого типа событий
             async function handleEntityCreated(data) {{
                 try {{
                     const response = await fetch(`/api/entities/${{data.entity_id}}`);
@@ -1358,7 +1275,6 @@ def generate_chat_page_html(
             
                     const entity = await response.json();
             
-                    // Формируем базовые данные Entity
                     const entityData = {{
                         type: 'entity',
                         id: data.entity_id,
@@ -1381,17 +1297,11 @@ def generate_chat_page_html(
                         comment_count: 0
                     }};
             
-                    // ОСОБАЯ ОБРАБОТКА ДЛЯ INFO
                     if (entity.type === 'info') {{
-                        // Используем required_user_ids из данных WebSocket или из entity
-                        const requiredUserIds = data.required_user_ids || entity.required_user_ids || [];
-                        
-                        // Преобразуем ID в объекты пользователей
+                        const requiredUserIds = data.required_user_ids || entity.required_user_ids || [];                       
                         const requiredUsers = [];
                         
-                        // Для каждого required пользователя создаем объект
                         requiredUserIds.forEach(userId => {{
-                            // Ищем пользователя в chatUsers или allUsers
                             let user = chatData.chatUsers.find(u => u.id === userId);
                             if (!user && allUsers.length > 0) {{
                                 user = allUsers.find(u => u.id === userId);
@@ -1403,7 +1313,6 @@ def generate_chat_page_html(
                                     display_name: user.display_name
                                 }});
                             }} else {{
-                                // Если пользователь не найден, создаем минимальный объект
                                 requiredUsers.push({{
                                     id: userId,
                                     display_name: 'Unknown User'
@@ -1413,32 +1322,25 @@ def generate_chat_page_html(
                         
                         entityData.required_users = requiredUsers;
                         
-                        // Определяем, должен ли текущий пользователь прочитать это Info
                         const isUserInRequiredList = requiredUserIds.includes(chatData.userId);
                         const isAuthor = data.author_id === chatData.userId;
                         
-                        // Автор всегда видит "0/X" и не видит кнопку "Mark as read"
                         if (isAuthor) {{
-                            entityData.has_read = true; // Для автора всегда "прочитано" (чтобы не выделялось)
+                            entityData.has_read = true;
                             entityData.read_count = 0;
                         }} else if (isUserInRequiredList) {{
-                            // Для других пользователей в списке required - еще не прочитано
                             entityData.has_read = false;
                             entityData.read_count = 0;
                         }} else {{
-                            // Для пользователей не в списке required - не отображаем ничего
                             entityData.has_read = true;
-                            entityData.read_count = requiredUserIds.length; // Показываем общее количество
+                            entityData.read_count = requiredUserIds.length;
                         }}
                     }}
             
-                    // Добавляем в историю
                     chatData.history.push(entityData);
-                    // Сортируем историю по времени
                     chatData.history.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
                     renderHistory();
             
-                    // Прокручиваем вниз
                     const chatArea = document.getElementById('chat-area');
                     if (chatArea) {{
                         setTimeout(() => {{
@@ -1451,7 +1353,6 @@ def generate_chat_page_html(
             }}
 
             function handleEntityUpdated(data) {{
-                // Находим Entity в истории
                 const entityIndex = chatData.history.findIndex(
                     item => item.type === 'entity' && item.id === data.entity_id
                 );
@@ -1459,23 +1360,18 @@ def generate_chat_page_html(
                 if (entityIndex !== -1) {{
                     const entity = chatData.history[entityIndex];
                     
-                    // Обновляем основные поля
                     Object.keys(data.updated_fields).forEach(field => {{
                         if (field !== 'required_user_ids' && field !== 'read_count') {{
                             entity[field] = data.updated_fields[field];
                         }}
                     }});
                     
-                    // ОСОБАЯ ОБРАБОТКА ДЛЯ INFO
                     if (entity.entity_type === 'info') {{
-                        // Обновляем список required_user_ids если есть
                         if (data.updated_fields.required_user_ids) {{
                             const requiredUserIds = data.updated_fields.required_user_ids;
                             
-                            // Обновляем список required_users
                             const requiredUsers = [];
                             requiredUserIds.forEach(userId => {{
-                                // Ищем пользователя в chatUsers или allUsers
                                 let user = chatData.chatUsers.find(u => u.id === userId);
                                 if (!user && allUsers.length > 0) {{
                                     user = allUsers.find(u => u.id === userId);
@@ -1497,30 +1393,24 @@ def generate_chat_page_html(
                             entity.required_users = requiredUsers;
                         }}
                         
-                        // Обновляем счетчик прочитавших
                         if (data.updated_fields.read_count !== undefined) {{
                             entity.read_count = data.updated_fields.read_count;
                         }}
                         
-                        // ПЕРЕСЧИТЫВАЕМ has_read ДЛЯ ТЕКУЩЕГО ПОЛЬЗОВАТЕЛЯ
                         const isAuthor = entity.author_id === chatData.userId;
                         const isUserInRequiredList = entity.required_users && 
                             entity.required_users.some(u => u.id === chatData.userId);
                         
                         if (isAuthor) {{
-                            // Автор всегда считается прочитавшим
                             entity.has_read = true;
                         }} else if (isUserInRequiredList) {{
                             checkIfCurrentUserHasRead(entity.id);
                         }} else {{
-                            // Пользователь не в списке required
                             entity.has_read = true;
                         }}
                     }}
                     
-                    entity.updated_at = data.updated_at;
-            
-                    // Перерисовываем историю
+                    entity.updated_at = data.updated_at;           
                     renderHistory();
                 }}
             }}
@@ -1533,25 +1423,20 @@ def generate_chat_page_html(
                     const entity = await response.json();
                     if (entity.type !== 'info') return;
                     
-                    // Находим entity в истории
                     const entityIndex = chatData.history.findIndex(e => e.id === entityId);
                     if (entityIndex === -1) return;
                     
                     const historyEntity = chatData.history[entityIndex];
                     
-                    // Проверяем через API статуса прочтения
                     const readStatusResponse = await fetch(`/api/info/${{entityId}}/reads`);
                     if (readStatusResponse.ok) {{
                         const readStatus = await readStatusResponse.json();
                         
-                        // Проверяем, есть ли текущий пользователь в списке прочитавших
                         const hasRead = readStatus.read.some(item => item.user.id === chatData.userId);
                         historyEntity.has_read = hasRead;
                         
-                        // Обновляем счетчик
                         historyEntity.read_count = readStatus.read_count;
                         
-                        // Перерисовываем историю
                         renderHistory();
                     }}
                 }} catch (error) {{
@@ -1560,9 +1445,7 @@ def generate_chat_page_html(
             }}
 
             async function handleTopicCreated(data) {{
-                // Загружаем полные данные Topic
                 try {{
-                    // Добавляем в историю
                     const topicData = {{
                         type: 'topic',
                         id: data.topic_id,
@@ -1577,7 +1460,6 @@ def generate_chat_page_html(
                     chatData.history.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
                     renderHistory();
 
-                    // Прокручиваем вниз
                     const chatArea = document.getElementById('chat-area');
                     if (chatArea) {{
                         setTimeout(() => {{
@@ -1590,7 +1472,6 @@ def generate_chat_page_html(
             }}
 
             function handleCommentCreated(data) {{
-                // Обновляем счетчик комментариев
                 const itemIndex = chatData.history.findIndex(
                     item => item.id === data.thread_id
                 );
@@ -1599,13 +1480,11 @@ def generate_chat_page_html(
                     const item = chatData.history[itemIndex];
                     item.comment_count = (item.comment_count || 0) + 1;
 
-                    // Обновляем отображение счетчика
                     const commentBtn = document.querySelector(`button[onclick*="${{data.thread_id}}"] .count`);
                     if (commentBtn) {{
                         commentBtn.textContent = item.comment_count;
                     }}
 
-                    // Если дровер с комментариями открыт для этого thread_id, обновляем его
                     if (currentThreadId === data.thread_id) {{
                         addCommentToDrawer(data);
                     }}
@@ -1613,25 +1492,21 @@ def generate_chat_page_html(
             }}
 
             async function addCommentToDrawer(data) {{
-                // Загружаем полные данные комментария
                 try {{
                     const response = await fetch(`/api/comments/single/${{data.comment_id}}`);
                     if (!response.ok) return;
                     
                     const comment = await response.json();
                     
-                    // Проверяем, что комментарий относится к открытому thread
                     if (comment.thread_id !== currentThreadId) {{
                         return;
                     }}
                     
-                    // Удаляем плейсхолдер "No comments yet", если он есть
                     const placeholder = document.getElementById('no-comments-placeholder');
                     if (placeholder) {{
                         placeholder.remove();
                     }}
                     
-                    // Добавляем комментарий в дровер
                     const drawerContent = document.getElementById('drawer-content');
                     if (drawerContent) {{
                         const commentHtml = `
@@ -1648,7 +1523,6 @@ def generate_chat_page_html(
                         
                         drawerContent.insertAdjacentHTML('beforeend', commentHtml);
                         
-                        // Прокручиваем вниз к новому комментарию
                         drawerContent.scrollTop = drawerContent.scrollHeight;
                     }}
                 }} catch (error) {{
@@ -1657,7 +1531,6 @@ def generate_chat_page_html(
             }}
 
             function handleInfoRead(data) {{
-                // Находим Info Entity в истории
                 const entityIndex = chatData.history.findIndex(
                     item => item.type === 'entity' && 
                             item.id === data.entity_id && 
@@ -1665,34 +1538,27 @@ def generate_chat_page_html(
                 );
             
                 if (entityIndex !== -1) {{
-                    const entity = chatData.history[entityIndex];
-                    
-                    // Обновляем счетчик прочитавших
+                    const entity = chatData.history[entityIndex];                   
                     entity.read_count = data.read_count || 0;
                     
-                    // Если текущий пользователь прочитал, обновляем has_read
                     if (data.user_id === chatData.userId) {{
                         entity.has_read = true;
                     }}
                     
-                    // Обновляем отображение счетчика прочитавших
                     const readCountElement = document.querySelector(`[data-entity-id="${{data.entity_id}}"] .read-count`);
                     if (readCountElement && entity.required_users) {{
                         const totalCount = entity.required_users.length;
                         readCountElement.textContent = `${{entity.read_count}}/${{totalCount}}`;
                     }}
             
-                    // Обновляем кнопку прочтения для автора
                     const readInfoBtn = document.querySelector(`button[onclick*="openInfoReadsDrawer('${{data.entity_id}}')"]`);
                     if (readInfoBtn && entity.required_users) {{
                         const totalCount = entity.required_users.length;
                         readInfoBtn.innerHTML = `👁️ ${{entity.read_count}}/${{totalCount}}`;
                     }}
                     
-                    // Обновляем выделение непрочитанных Info
                     const messageElement = document.querySelector(`.message[data-entity-id="${{data.entity_id}}"]`);
                     if (messageElement) {{
-                        // Проверяем, нужно ли убрать выделение "непрочитанного"
                         if (entity.has_read || entity.author_id === chatData.userId) {{
                             messageElement.classList.remove('unread-info');
                         }} else {{
@@ -1700,7 +1566,6 @@ def generate_chat_page_html(
                         }}
                     }}
                     
-                    // Перерисовываем историю
                     renderHistory();
                 }}
                 if (currentInfoReadsEntityId === data.entity_id) {{
@@ -1708,7 +1573,6 @@ def generate_chat_page_html(
                 }}
             }}
 
-            // Функция загрузки навигации
             async function loadNavigation() {{
                 try {{
                     const [userInfoRes, channelsRes, chatsRes] = await Promise.all([
@@ -1730,20 +1594,17 @@ def generate_chat_page_html(
 
                     let html = '';
 
-                    // Admin button
                     if (userInfo.is_admin) {{
-                        html += '<div id="admin-btn" onclick="openAdminPanel()" class="nav-item">Admin Panel</div>';
+                        html += '<div id="admin-btn" onclick="openAdminPanel()" class="nav-item">Панель администратора</div>';
                     }}
 
-                    // Profile section
-                    html += '<div id="profile-btn" onclick="openProfile()" class="nav-item">Profile</div>';
+                    html += '<div id="profile-btn" onclick="openProfile()" class="nav-item">Профиль</div>';
                     html += '<div id="notes-btn" class="nav-item ' + 
-                            (chatData.isChannel ? '' : (chatData.chatTitle === 'Notes' ? 'active' : '')) + 
-                            '">Notes</div>';
-                    html += '<div id="task-explorer" onclick="openTaskExplorer()" class="nav-item">Task Explorer</div>';
+                            (chatData.isChannel ? '' : (chatData.chatTitle === 'Заметки' ? 'active' : '')) + 
+                            '">Заметки</div>';
+                    html += '<div id="task-explorer" onclick="openTaskExplorer()" class="nav-item">Обозреватель задач</div>';
 
-                    // Chats section
-                    html += '<div id="chats-toggle" class="nav-item">Chats ▼</div>';
+                    html += '<div id="chats-toggle" class="nav-item">Чаты ▼</div>';
                     html += '<div id="chats-submenu" class="submenu">';
 
                     for (const dept in chats) {{
@@ -1762,8 +1623,7 @@ def generate_chat_page_html(
 
                     html += '</div>';
 
-                    // Channels section
-                    html += '<div id="channels-toggle" class="nav-item">Channels ▼</div>';
+                    html += '<div id="channels-toggle" class="nav-item">Каналы ▼</div>';
                     html += '<div id="channels-submenu" class="submenu">';
 
                     for (const group in channels) {{
@@ -1782,12 +1642,10 @@ def generate_chat_page_html(
 
                     html += '</div>';
 
-                    // Logout
-                    html += '<div id="logout-btn" class="nav-item" onclick="logout()">Logout</div>';
+                    html += '<div id="logout-btn" class="nav-item" onclick="logout()">Выйти</div>';
 
                     sidebar.innerHTML = html;
 
-                    // Добавляем обработчики событий для toggle-меню
                     setupNavigationEvents();
 
                 }} catch (error) {{
@@ -1795,9 +1653,7 @@ def generate_chat_page_html(
                 }}
             }}
 
-            // Настройка событий навигации
             function setupNavigationEvents() {{
-                // Toggle для Chats
                 const chatsToggle = document.getElementById('chats-toggle');
                 const chatsSubmenu = document.getElementById('chats-submenu');
                 if (chatsToggle && chatsSubmenu) {{
@@ -1807,7 +1663,6 @@ def generate_chat_page_html(
                     chatsSubmenu.style.display = 'flex';
                 }}
 
-                // Toggle для Channels
                 const channelsToggle = document.getElementById('channels-toggle');
                 const channelsSubmenu = document.getElementById('channels-submenu');
                 if (channelsToggle && channelsSubmenu) {{
@@ -1817,7 +1672,6 @@ def generate_chat_page_html(
                     channelsSubmenu.style.display = 'flex';
                 }}
 
-                // Notes button
                 const notesBtn = document.getElementById('notes-btn');
                 if (notesBtn) {{
                     notesBtn.addEventListener('click', async () => {{
@@ -1836,7 +1690,6 @@ def generate_chat_page_html(
                 }}
             }}
 
-            // Функции перехода
             function openAdminPanel() {{
                 window.location.href = '/admin/';
             }}
@@ -1857,19 +1710,15 @@ def generate_chat_page_html(
                 window.location.href = '/channel/' + channelId + '/';
             }}
 
-            // Функция выхода
             function logout() {{
-                // Создаем невидимую форму
                 const form = document.createElement('form');
                 form.method = 'POST';
                 form.action = '/logout';
                                 
-                // Добавляем форму в документ и отправляем
                 document.body.appendChild(form);
                 form.submit();
             }}
 
-            // Отображение доступных типов Entity в виде кнопок
             function renderEntityTypes() {{
                 const entityTypesContainer = document.getElementById('entity-types');
                 if (!entityTypesContainer) return;
@@ -1883,7 +1732,6 @@ def generate_chat_page_html(
 
                 entityTypesContainer.innerHTML = html;
 
-                // Добавляем обработчики для кнопок Entity
                 document.querySelectorAll('.entity-type-btn').forEach(btn => {{
                     btn.addEventListener('click', (e) => {{
                         const entityType = e.target.dataset.type;
@@ -1892,7 +1740,6 @@ def generate_chat_page_html(
                 }});
             }}
 
-            // Отображение истории
             function renderHistory() {{
                 const chatArea = document.getElementById('chat-area');
                 if (!chatArea) return;
@@ -1900,17 +1747,14 @@ def generate_chat_page_html(
                 let html = '';
                 
                 if (chatData.history.length === 0) {{
-                    html = '<div style="text-align: center; padding: 40px; color: #888;">No messages yet</div>';
+                    html = '<div style="text-align: center; padding: 40px; color: #888;">Сообщений пока нет</div>';
                 }} else {{
                     chatData.history.forEach(msg => {{
                         const time = new Date(msg.created_at).toLocaleString();
                         
-                        // Проверяем, является ли пользователь в списке required_users
                         const isUserInRequiredList = msg.required_users && 
                             msg.required_users.some(user => user.id === chatData.userId);
                         
-                        // Проверяем, является ли сообщение непрочитанным Info для текущего пользователя
-                        // Только если пользователь в списке required_users и еще не прочитал
                         const isUnreadInfo = msg.type === 'entity' && 
                                              msg.entity_type === 'info' && 
                                              msg.author_id !== chatData.userId &&
@@ -1921,47 +1765,38 @@ def generate_chat_page_html(
                 
                         html += '<div class="' + messageClass + '">';
                         
-                        // Новый header с разделением информации автора и кнопок
                         html += '<div class="message-header">';
                         html += '<div class="author-info">';
                         html += '<span class="author">' + escapeHtml(msg.author_display_name) + '</span>';
                         html += '<span class="timestamp">' + time + '</span>';
                         html += '</div>';
                         
-                        // Блок с кнопками действий
                         html += '<div class="message-actions">';
                         
-                        // Кнопка редактирования
                         if (msg.type === 'entity' && (msg.entity_type !== 'info' || msg.author_id === chatData.userId)) {{
-                            html += '<button class="edit-btn" onclick="openEditEntityModal(\\'' + msg.id + '\\')">✏️ Edit</button>';
+                            html += '<button class="edit-btn" onclick="openEditEntityModal(\\'' + msg.id + '\\')">✏️ Редактировать</button>';
                         }}
                 
-                        // Кнопка прочтения Info
                         if (msg.type === 'entity' && msg.entity_type === 'info') {{
-                            // Проверяем, находится ли текущий пользователь в списке required_users
                             const isUserInRequiredList = msg.required_users && 
                                 msg.required_users.some(u => u.id === chatData.userId);
                             
                             if (msg.author_id === chatData.userId) {{
-                                // Для автора показываем кнопку с количеством прочитавших
                                 const readCount = msg.read_count || 0;
                                 const totalCount = msg.required_users ? msg.required_users.length : 0;
                                 html += '<button class="read-info-btn" onclick="openInfoReadsDrawer(\\'' + msg.id + '\\')">👁️ ' + readCount + '/' + totalCount + '</button>';
                             }} else if (isUserInRequiredList && !msg.has_read) {{
-                                // Для других пользователей, которые в списке required_users и еще не прочитали
-                                html += '<button class="mark-read-btn" onclick="markAsRead(\\'' + msg.id + '\\')">👁️ Mark as read</button>';
+                                html += '<button class="mark-read-btn" onclick="markAsRead(\\'' + msg.id + '\\')">👁️ Отметить прочитанным</button>';
                             }}
                         }}
                 
-                        // Кнопка для комментариев (всегда)
                         html += '<button class="comment-btn" onclick="openCommentsDrawer(\\'' + msg.id + '\\', \\'' + msg.type + '\\')">';
                         html += '<span class="count">' + (msg.comment_count || 0) + '</span> 💬';
                         html += '</button>';
                         
-                        html += '</div>'; // Закрываем .message-actions
-                        html += '</div>'; // Закрываем .message-header
+                        html += '</div>';
+                        html += '</div>';
                 
-                        // Контент сообщения
                         if (msg.type === 'topic') {{
                             html += '<div class="message-content">' + escapeHtml(msg.text) + '</div>';
                         }} else if (msg.type === 'entity') {{
@@ -1969,71 +1804,69 @@ def generate_chat_page_html(
                             html += '<strong>' + escapeHtml(msg.title) + '</strong>';
                             html += '</div>';
                 
-                            // Детали Entity
                             html += '<div class="entity-details">';
-                            html += '<div class="entity-field"><span class="entity-field-label">Type:</span> ' + msg.entity_type + '</div>';
+                            html += '<div class="entity-field"><span class="entity-field-label">Тип:</span> ' + msg.entity_type + '</div>';
                 
                             if (msg.body) {{
-                                html += '<div class="entity-field"><span class="entity-field-label">Body:</span><br>' + 
+                                html += '<div class="entity-field"><span class="entity-field-label">Описание:</span><br>' + 
                                         escapeHtml(msg.body) + '</div>';
                             }}
                 
-                            // Поля в зависимости от типа Entity с правильными статусами
                             switch(msg.entity_type) {{
                                 case 'question':
-                                    html += '<div class="entity-field"><span class="entity-field-label">Priority:</span> ' + 
-                                           (msg.priority !== undefined ? msg.priority : 'Not set') + '</div>';
-                                    html += '<div class="entity-field"><span class="entity-field-label">Status:</span> ' + 
+                                    html += '<div class="entity-field"><span class="entity-field-label">Приоритет:</span> ' + 
+                                           (msg.priority !== undefined ? msg.priority : 'Не указано') + '</div>';
+                                    html += '<div class="entity-field"><span class="entity-field-label">Статус:</span> ' + 
                                            (msg.status ? msg.status.replaceAll('_', ' ').replace(/\\b\\w/g, l => l.toUpperCase()) : 'Created') + '</div>';
-                                    html += '<div class="entity-field"><span class="entity-field-label">Deadline:</span> ' + 
-                                           (msg.deadline ? new Date(msg.deadline).toLocaleString() : 'Not set') + '</div>';
+                                    html += '<div class="entity-field"><span class="entity-field-label">Закрыть до:</span> ' + 
+                                           (msg.deadline ? new Date(msg.deadline).toLocaleString() : 'Не указано') + '</div>';
                                     break;
                 
                                 case 'defect':
                                 case 'task':
-                                    html += '<div class="entity-field"><span class="entity-field-label">Severity:</span> ' + 
-                                           (msg.severity !== undefined ? msg.severity : 'Not set') + '</div>';
-                                    html += '<div class="entity-field"><span class="entity-field-label">Reproducible:</span> ' + 
-                                           (msg.reproducible !== undefined ? (msg.reproducible ? 'Yes' : 'No') : 'Not set') + '</div>';
-                                    html += '<div class="entity-field"><span class="entity-field-label">Status:</span> ' + 
+                                    html += '<div class="entity-field"><span class="entity-field-label">Приоритет:</span> ' + 
+                                           (msg.severity !== undefined ? msg.severity : 'Не указано') + '</div>';
+                                    html += '<div class="entity-field"><span class="entity-field-label">Воспроизводится ли:</span> ' + 
+                                           (msg.reproducible !== undefined ? (msg.reproducible ? 'Да' : 'Нет') : 'Не указано') + '</div>';
+                                    html += '<div class="entity-field"><span class="entity-field-label">Статус:</span> ' + 
                                            (msg.status ? msg.status.replaceAll('_', ' ').replace(/\\b\\w/g, l => l.toUpperCase()) : 'Created') + '</div>';
-                                    html += '<div class="entity-field"><span class="entity-field-label">Deadline:</span> ' + 
-                                           (msg.deadline ? new Date(msg.deadline).toLocaleString() : 'Not set') + '</div>';
-                                    html += '<div class="entity-field"><span class="entity-field-label">Executor:</span> ' + 
-                                           (msg.executor || 'Not assigned') + '</div>';
+                                    html += '<div class="entity-field"><span class="entity-field-label">Закрыть до:</span> ' + 
+                                           (msg.deadline ? new Date(msg.deadline).toLocaleString() : 'Не указано') + '</div>';
+                                    html += '<div class="entity-field"><span class="entity-field-label">Исполнитель:</span> ' + 
+                                           (msg.executor || 'Не назначен') + '</div>';
                                     html += '<div class="entity-field"><span class="entity-field-label">QA:</span> ' + 
-                                           (msg.qa || 'Not assigned') + '</div>';
+                                           (msg.qa || 'Не назначен') + '</div>';
                                     break;
                 
                                 case 'info':
-                                    html += '<div class="entity-field"><span class="entity-field-label">Deadline:</span> ' + 
-                                           (msg.deadline ? new Date(msg.deadline).toLocaleString() : 'Not set') + '</div>';
+                                    html += '<div class="entity-field"><span class="entity-field-label">Закрыть до:</span> ' + 
+                                           (msg.deadline ? new Date(msg.deadline).toLocaleString() : 'Не указано') + '</div>';
                 
                                     break;
                 
                                 case 'proposal':
-                                    html += '<div class="entity-field"><span class="entity-field-label">Priority:</span> ' + 
-                                           (msg.priority !== undefined ? msg.priority : 'Not set') + '</div>';
-                                    html += '<div class="entity-field"><span class="entity-field-label">Status:</span> ' + 
+                                    html += '<div class="entity-field"><span class="entity-field-label">Приоритет:</span> ' + 
+                                           (msg.priority !== undefined ? msg.priority : 'Не указано') + '</div>';
+                                    html += '<div class="entity-field"><span class="entity-field-label">Статус:</span> ' + 
                                            (msg.status ? msg.status.replaceAll('_', ' ').replace(/\\b\\w/g, l => l.toUpperCase()) : 'Created') + '</div>';
                                     break;
                 
                                 case 'action_point':
-                                    html += '<div class="entity-field"><span class="entity-field-label">Priority:</span> ' + 
-                                           (msg.priority !== undefined ? msg.priority : 'Not set') + '</div>';
-                                    html += '<div class="entity-field"><span class="entity-field-label">Executor:</span> ' + 
-                                       (msg.executor || 'Not assigned') + '</div>';
-                                    html += '<div class="entity-field"><span class="entity-field-label">Status:</span> ' + 
+                                    html += '<div class="entity-field"><span class="entity-field-label">Приоритет:</span> ' + 
+                                           (msg.priority !== undefined ? msg.priority : 'Не указано') + '</div>';
+                                    html += '<div class="entity-field"><span class="entity-field-label">Исполнитель:</span> ' + 
+                                       (msg.executor || 'Не назначен') + '</div>';
+                                    html += '<div class="entity-field"><span class="entity-field-label">Статус:</span> ' + 
                                            (msg.status ? msg.status.replaceAll('_', ' ').replace(/\\b\\w/g, l => l.toUpperCase()) : 'Created') + '</div>';
-                                    html += '<div class="entity-field"><span class="entity-field-label">Deadline:</span> ' + 
-                                           (msg.deadline ? new Date(msg.deadline).toLocaleString() : 'Not set') + '</div>';
+                                    html += '<div class="entity-field"><span class="entity-field-label">Закрыть до:</span> ' + 
+                                           (msg.deadline ? new Date(msg.deadline).toLocaleString() : 'Не указано') + '</div>';
                                     break;
                             }}
                 
-                            html += '</div>'; // Закрываем .entity-details
+                            html += '</div>';
                         }}
                 
-                        html += '</div>'; // Закрываем .message
+                        html += '</div>';
                     }});
                 }}
                 
@@ -2058,9 +1891,7 @@ def generate_chat_page_html(
                 return date.toISOString();
             }}
 
-            // Открытие модального окна для создания Entity
             async function openEntityModal(entityType) {{
-                // Загружаем список пользователей, если еще не загружены
                 if (allUsers.length === 0) {{
                     try {{
                         const response = await fetch('/api/users');
@@ -2073,11 +1904,9 @@ def generate_chat_page_html(
                     }}
                 }}
 
-                // Обновляем заголовок
                 const displayName = entityType.replace('_', ' ').replace(/\\b\\w/g, l => l.toUpperCase());
-                document.getElementById('modal-title').textContent = 'Create ' + displayName;
+                document.getElementById('modal-title').textContent = 'Создать ' + displayName;
 
-                // Скрываем все группы полей
                 document.getElementById('priority-group').style.display = 'none';
                 document.getElementById('severity-group').style.display = 'none';
                 document.getElementById('reproducible-group').style.display = 'none';
@@ -2086,11 +1915,9 @@ def generate_chat_page_html(
                 document.getElementById('qa-group').style.display = 'none';
                 document.getElementById('required-users-group').style.display = 'none';
 
-                // Получаем отфильтрованных пользователей
                 const chatUsers = getChatUsers();
                 const infoUsers = getInfoUsers();
 
-                // Показываем нужные поля в зависимости от типа Entity
                 switch(entityType) {{
                     case 'question':
                         document.getElementById('priority-group').style.display = 'block';
@@ -2105,7 +1932,6 @@ def generate_chat_page_html(
                         document.getElementById('executor-group').style.display = 'block';
                         document.getElementById('qa-group').style.display = 'block';
 
-                        // Заполняем выпадающие списки только пользователями из чата/канала
                         fillUserDropdown('entity-executor', chatUsers, true);
                         fillUserDropdown('entity-qa', chatUsers, true);
                         break;
@@ -2114,7 +1940,6 @@ def generate_chat_page_html(
                         document.getElementById('deadline-group').style.display = 'block';
                         document.getElementById('required-users-group').style.display = 'block';
                         
-                        // Создаем список пользователей с чекбоксами - только из чата/канала, исключая текущего
                         const usersList = document.getElementById('required-users-list');
                         usersList.innerHTML = '';
                         
@@ -2139,42 +1964,35 @@ def generate_chat_page_html(
                         document.getElementById('deadline-group').style.display = 'block';
                         document.getElementById('executor-group').style.display = 'block';
                         
-                        // Заполняем выпадающий список только пользователями из чата/канала
                         fillUserDropdown('entity-executor', chatUsers, true);
                         break;
                 }}
 
-                // Сохраняем тип Entity в data-type формы
                 document.getElementById('entity-form').dataset.type = entityType;
 
-                // Показываем модальное окно
                 document.getElementById('entity-modal-overlay').style.display = 'flex';
             }}
 
-            // Обновленная функция для открытия модального окна редактирования Entity
             async function openEditEntityModal(entityId) {{
                 editingEntityId = entityId;
                 
-                // Находим Entity в истории
                 const entity = chatData.history.find(e => e.id === entityId);
                 if (!entity) {{
-                    alert('Entity not found');
+                    alert('Сущность не найдена');
                     return;
                 }}
     
-                // Загружаем полные данные Entity
                 try {{
                     const response = await fetch('/api/entities/' + entityId);
                     if (!response.ok) throw new Error('Failed to load entity data');
                     const fullEntity = await response.json();
                     
-                    // Обновляем modal
-                    document.getElementById('edit-modal-title').textContent = 'Edit ' + entity.entity_type;
+                    const displayName = entity.entity_type.replace('_', ' ').replace(/\\b\\w/g, l => l.toUpperCase());
+                    document.getElementById('edit-modal-title').textContent = 'Редактировать ' + displayName;
                     document.getElementById('edit-entity-id').value = entityId;
                     document.getElementById('edit-entity-title').value = entity.title || '';
                     document.getElementById('edit-entity-body').value = fullEntity.body || '';
     
-                    // Скрываем все группы полей
                     document.getElementById('edit-priority-group').style.display = 'none';
                     document.getElementById('edit-severity-group').style.display = 'none';
                     document.getElementById('edit-reproducible-group').style.display = 'none';
@@ -2184,7 +2002,6 @@ def generate_chat_page_html(
                     document.getElementById('edit-required-users-group').style.display = 'none';
                     document.getElementById('edit-status-group').style.display = 'none';
     
-                    // Загружаем список пользователей, если нужно
                     if (allUsers.length === 0) {{
                         try {{
                             const usersResponse = await fetch('/api/users');
@@ -2196,11 +2013,9 @@ def generate_chat_page_html(
                         }}
                     }}
     
-                    // Получаем отфильтрованных пользователей
                     const chatUsers = getChatUsers();
                     const infoUsers = getInfoUsers();
     
-                    // Настраиваем поля в зависимости от типа Entity
                     switch(entity.entity_type) {{
                         case 'question':
                             document.getElementById('edit-priority-group').style.display = 'block';
@@ -2211,7 +2026,6 @@ def generate_chat_page_html(
                             if (fullEntity.deadline) {{
                                 document.getElementById('edit-entity-deadline').value = formatDateForInput(fullEntity.deadline);
                             }}
-                            // ... существующий код для статусов ...
                             break;
     
                         case 'defect':
@@ -2229,11 +2043,9 @@ def generate_chat_page_html(
                                 document.getElementById('edit-entity-deadline').value = formatDateForInput(fullEntity.deadline);
                             }}
                             
-                            // Заполняем выпадающие списки только пользователями из чата/канала
                             fillUserDropdown('edit-entity-executor', chatUsers, true);
                             fillUserDropdown('edit-entity-qa', chatUsers, true);
                             
-                            // Устанавливаем выбранные значения
                             if (fullEntity.executor_id) {{
                                 document.getElementById('edit-entity-executor').value = fullEntity.executor_id;
                             }}
@@ -2241,7 +2053,6 @@ def generate_chat_page_html(
                                 document.getElementById('edit-entity-qa').value = fullEntity.qa_id;
                             }}
                             
-                            // ... существующий код для статусов ...
                             break;
     
                         case 'info':
@@ -2252,7 +2063,6 @@ def generate_chat_page_html(
                                 document.getElementById('edit-entity-deadline').value = formatDateForInput(fullEntity.deadline);
                             }}
                             
-                            // Создаем список пользователей с чекбоксами - только из чата/канала, исключая текущего
                             const usersList = document.getElementById('edit-required-users-list');
                             usersList.innerHTML = '';
                             
@@ -2270,7 +2080,6 @@ def generate_chat_page_html(
                                 usersList.appendChild(div);
                             }});
                             
-                            // Добавляем пользователей, которые были выбраны, но больше не в чате/канале
                             requiredUserIds.forEach(userId => {{
                                 if (!infoUsers.some(u => u.id === userId)) {{
                                     const user = allUsers.find(u => u.id === userId);
@@ -2299,7 +2108,6 @@ def generate_chat_page_html(
                                 document.getElementById('edit-entity-deadline').value = formatDateForInput(fullEntity.deadline);
                             }}
                             
-                            // Заполняем выпадающий список только пользователями из чата/канала
                             fillUserDropdown('edit-entity-executor', chatUsers, true);
                             
                             if (fullEntity.executor_id) {{
@@ -2309,7 +2117,6 @@ def generate_chat_page_html(
                             break;
                     }}
     
-                    // Показываем модальное окно
                     document.getElementById('edit-entity-modal-overlay').style.display = 'flex';
     
                 }} catch (error) {{
@@ -2318,7 +2125,6 @@ def generate_chat_page_html(
                 }}
             }}
             
-            // Получение отфильтрованных пользователей (только из текущего чата/канала)
             function getChatUsers() {{
                 // Если уже загружены все пользователи, фильтруем их по chatUsers
                 if (allUsers.length > 0) {{
@@ -2329,13 +2135,11 @@ def generate_chat_page_html(
                 return [];
             }}
 
-            // Получение отфильтрованных пользователей для Info (исключая текущего)
             function getInfoUsers() {{
                 const chatUsers = getChatUsers();
                 return chatUsers.filter(user => user.id !== chatData.userId);
             }}
 
-            // Заполнение выпадающего списка пользователями
             function fillUserDropdown(selectId, users, includeCurrentUser = true) {{
                 const select = document.getElementById(selectId);
                 if (!select) return;
@@ -2343,13 +2147,12 @@ def generate_chat_page_html(
                 const currentValue = select.value;
                 const currentValueIsInList = users.some(user => user.id === currentValue);
                 
-                // Сохраняем текущее значение, если оно есть
                 let currentUser = null;
                 if (currentValue && !currentValueIsInList) {{
                     currentUser = allUsers.find(u => u.id === currentValue);
                 }}
                 
-                select.innerHTML = '<option value="">Select user...</option>';
+                select.innerHTML = '<option value="">Выберите пользователя...</option>';
             
                 users.forEach(user => {{
                     // Если includeCurrentUser = false, исключаем текущего пользователя
@@ -2362,14 +2165,12 @@ def generate_chat_page_html(
                     option.textContent = user.display_name;
                     
                     if (user.id === chatData.userId) {{
-                        option.textContent += ' (me)';
+                        option.textContent += ' (я)';
                     }}
                     
                     select.appendChild(option);
                 }});
                 
-                // Если текущее значение есть, но его нет в списке (пользователь вышел из чата),
-                // добавляем его как disabled опцию
                 if (currentValue && !currentValueIsInList && currentUser) {{
                     const option = document.createElement('option');
                     option.value = currentValue;
@@ -2384,30 +2185,26 @@ def generate_chat_page_html(
                 }}
             }}
             
-            // Функция открытия модального окна редактирования Entity
             async function openEditEntityModal(entityId) {{
                 editingEntityId = entityId;
                 
-                // Находим Entity в истории
                 const entity = chatData.history.find(e => e.id === entityId);
                 if (!entity) {{
                     alert('Entity not found');
                     return;
                 }}
     
-                // Загружаем полные данные Entity
                 try {{
                     const response = await fetch('/api/entities/' + entityId);
                     if (!response.ok) throw new Error('Failed to load entity data');
                     const fullEntity = await response.json();
                     
-                    // Обновляем modal
-                    document.getElementById('edit-modal-title').textContent = 'Edit ' + entity.entity_type;
+                    const displayName = entity.entity_type.replace('_', ' ').replace(/\\b\\w/g, l => l.toUpperCase());
+                    document.getElementById('edit-modal-title').textContent = 'Редактировать ' + displayName;
                     document.getElementById('edit-entity-id').value = entityId;
                     document.getElementById('edit-entity-title').value = entity.title || '';
                     document.getElementById('edit-entity-body').value = fullEntity.body || '';
     
-                    // Скрываем все группы полей
                     document.getElementById('edit-priority-group').style.display = 'none';
                     document.getElementById('edit-severity-group').style.display = 'none';
                     document.getElementById('edit-reproducible-group').style.display = 'none';
@@ -2417,7 +2214,6 @@ def generate_chat_page_html(
                     document.getElementById('edit-required-users-group').style.display = 'none';
                     document.getElementById('edit-status-group').style.display = 'none';
     
-                    // Загружаем список пользователей, если нужно
                     if (allUsers.length === 0) {{
                         try {{
                             const usersResponse = await fetch('/api/users');
@@ -2429,7 +2225,6 @@ def generate_chat_page_html(
                         }}
                     }}
     
-                    // Настраиваем поля в зависимости от типа Entity
                     switch(entity.entity_type) {{
                         case 'question':
                             document.getElementById('edit-priority-group').style.display = 'block';
@@ -2466,11 +2261,9 @@ def generate_chat_page_html(
                                 document.getElementById('edit-entity-deadline').value = formatDateForInput(fullEntity.deadline);
                             }}
                             
-                            // Заполняем выпадающие списки
                             fillUserDropdown('edit-entity-executor', allUsers, true);
                             fillUserDropdown('edit-entity-qa', allUsers, true);
                             
-                            // Устанавливаем выбранные значения
                             if (fullEntity.executor_id) {{
                                 document.getElementById('edit-entity-executor').value = fullEntity.executor_id;
                             }}
@@ -2478,7 +2271,6 @@ def generate_chat_page_html(
                                 document.getElementById('edit-entity-qa').value = fullEntity.qa_id;
                             }}
                             
-                            // Заполняем статусы для Defect
                             const defectStatusSelect = document.getElementById('edit-entity-status');
                             defectStatusSelect.innerHTML = '';
                             const defectStatuses = ['created', 'in_progress', 'ready_for_test', 'in_testing', 'closed'];
@@ -2505,11 +2297,9 @@ def generate_chat_page_html(
                                 document.getElementById('edit-entity-deadline').value = formatDateForInput(fullEntity.deadline);
                             }}
                             
-                            // Заполняем выпадающие списки
                             fillUserDropdown('edit-entity-executor', allUsers, true);
                             fillUserDropdown('edit-entity-qa', allUsers, true);
                             
-                            // Устанавливаем выбранные значения
                             if (fullEntity.executor_id) {{
                                 document.getElementById('edit-entity-executor').value = fullEntity.executor_id;
                             }}
@@ -2517,7 +2307,6 @@ def generate_chat_page_html(
                                 document.getElementById('edit-entity-qa').value = fullEntity.qa_id;
                             }}
                             
-                            // Заполняем статусы для Task
                             const taskStatusSelect = document.getElementById('edit-entity-status');
                             taskStatusSelect.innerHTML = '';
                             const taskStatuses = ['created', 'in_progress', 'ready_for_test', 'in_testing', 'closed'];
@@ -2538,14 +2327,13 @@ def generate_chat_page_html(
                                 document.getElementById('edit-entity-deadline').value = formatDateForInput(fullEntity.deadline);
                             }}
                             
-                            // Создаем список пользователей с чекбоксами
                             const usersList = document.getElementById('edit-required-users-list');
                             usersList.innerHTML = '';
                             
                             const requiredUserIds = fullEntity.required_user_ids || [];
                             
                             allUsers.forEach(user => {{
-                                if (user.id !== chatData.userId) {{ // Исключаем автора
+                                if (user.id !== chatData.userId) {{
                                     const div = document.createElement('div');
                                     const isChecked = requiredUserIds.includes(user.id);
                                     div.innerHTML = `
@@ -2565,7 +2353,6 @@ def generate_chat_page_html(
                             
                             document.getElementById('edit-entity-priority').value = fullEntity.priority || 5;
                             
-                            // Заполняем статусы для Proposal
                             const proposalStatusSelect = document.getElementById('edit-entity-status');
                             proposalStatusSelect.innerHTML = '';
                             const proposalStatuses = ['created', 'discussed', 'accepted', 'rejected'];
@@ -2595,7 +2382,6 @@ def generate_chat_page_html(
                                 document.getElementById('edit-entity-executor').value = fullEntity.executor_id;
                             }}
                             
-                            // Заполняем статусы для Action Point
                             const actionPointStatusSelect = document.getElementById('edit-entity-status');
                             actionPointStatusSelect.innerHTML = '';
                             const actionPointStatuses = ['created', 'in_progress', 'closed'];
@@ -2609,7 +2395,6 @@ def generate_chat_page_html(
                             break;
                     }}
     
-                    // Показываем модальное окно
                     document.getElementById('edit-entity-modal-overlay').style.display = 'flex';
     
                 }} catch (error) {{
@@ -2618,7 +2403,6 @@ def generate_chat_page_html(
                 }}
             }}
     
-            // Функция для отметки Info как прочитанного
             async function markAsRead(infoId) {{
                 try {{
                     const response = await fetch('/api/info/' + infoId + '/read', {{
@@ -2629,7 +2413,6 @@ def generate_chat_page_html(
                     }});
             
                     if (response.ok) {{
-                        // Находим entity в истории
                         const entityIndex = chatData.history.findIndex(
                             e => e.id === infoId && e.entity_type === 'info'
                         );
@@ -2639,7 +2422,6 @@ def generate_chat_page_html(
                             entity.has_read = true;
                             entity.read_count = (entity.read_count || 0) + 1;
                             
-                            // Немедленно обновляем UI
                             renderHistory();
                         }}
                     }} else {{
@@ -2652,7 +2434,6 @@ def generate_chat_page_html(
                 }}
             }}
     
-            // Функция открытия дровера с информацией о прочтении Info
             async function openInfoReadsDrawer(infoId) {{
                 currentInfoReadsEntityId = infoId;
                 
@@ -2671,9 +2452,8 @@ def generate_chat_page_html(
                         html += '<h4>' + escapeHtml(infoEntity.title) + '</h4>';
                     }}
                     
-                    // Непрочитавшие
                     if (readData.not_read && readData.not_read.length > 0) {{
-                        html += '<p><strong>Not read yet:</strong></p>';
+                        html += '<p><strong>Ещё не ознакомились:</strong></p>';
                         readData.not_read.forEach(user => {{
                             html += '<div class="drawer-message" style="background-color: #ffe6e6;">';
                             html += '<div style="display: flex; align-items: center; gap: 10px;">';
@@ -2686,14 +2466,13 @@ def generate_chat_page_html(
                         html += '<div class="drawer-message" style="background-color: #e6ffe6;">';
                         html += '<div style="display: flex; align-items: center; gap: 10px;">';
                         html += '<div style="width: 10px; height: 10px; background-color: green; border-radius: 50%;"></div>';
-                        html += '<span>All users have read this info</span>';
+                        html += '<span>Все пользователи ознакомились с данным сообщением</span>';
                         html += '</div>';
                         html += '</div>';
                     }}
                     
-                    // Прочитавшие
                     if (readData.read && readData.read.length > 0) {{
-                        html += '<p><strong>Already read:</strong></p>';
+                        html += '<p><strong>Уже ознакомились:</strong></p>';
                         readData.read.forEach(item => {{
                             html += '<div class="drawer-message" style="background-color: #e6ffe6;">';
                             html += '<div style="display: flex; justify-content: space-between; align-items: center;">';
@@ -2714,7 +2493,6 @@ def generate_chat_page_html(
                 }}
             }}
     
-            // Настройка модального окна редактирования
             function setupEditModal() {{
                 const modalOverlay = document.getElementById('edit-entity-modal-overlay');
                 const closeModal = document.getElementById('edit-close-modal');
@@ -2738,7 +2516,6 @@ def generate_chat_page_html(
                 closeModal.addEventListener('click', closeEditModal);
                 cancelModal.addEventListener('click', closeEditModal);
     
-                // Отправка формы редактирования
                 entityForm.addEventListener('submit', async (e) => {{
                     e.preventDefault();
     
@@ -2752,7 +2529,6 @@ def generate_chat_page_html(
                         body: document.getElementById('edit-entity-body').value,
                     }};
     
-                    // Добавляем дополнительные поля в зависимости от типа Entity
                     switch(entity.entity_type) {{
                         case 'question':
                             formData.priority = parseInt(document.getElementById('edit-entity-priority').value) || 5;
@@ -2811,7 +2587,6 @@ def generate_chat_page_html(
                 }});
             }}
     
-            // Настройка дровера для прочтения Info
             function setupInfoReadsDrawer() {{
                 const drawerOverlay = document.getElementById('info-reads-drawer-overlay');
                 const closeDrawer = document.getElementById('close-info-reads-drawer');
@@ -2829,23 +2604,19 @@ def generate_chat_page_html(
                 }});
             }}
 
-            // Открытие дровера для комментариев
             async function openCommentsDrawer(threadId, threadType) {{
                 currentThreadId = threadId;
                 currentThreadType = threadType;
             
-                // Загружаем комментарии
                 try {{
                     const response = await fetch('/api/comments/' + threadId);
                     if (!response.ok) throw new Error('Failed to load comments');
             
                     const data = await response.json();
             
-                    // Отображаем в дровере
                     const drawerContent = document.getElementById('drawer-content');
                     let html = '';
             
-                    // Исходное сообщение
                     const originalMessage = chatData.history.find(m => m.id === threadId);
                     if (originalMessage) {{
                         const messageClass = 'drawer-message ' + originalMessage.type;
@@ -2870,11 +2641,9 @@ def generate_chat_page_html(
             
                         html += '</div>';
             
-                        // Разделитель
                         html += '<hr style="margin: 20px 0; border-color: #eee;">';
                     }}
             
-                    // Комментарии
                     if (data.comments && data.comments.length > 0) {{
                         data.comments.forEach(comment => {{
                             html += '<div class="drawer-message">';
@@ -2888,13 +2657,11 @@ def generate_chat_page_html(
                             html += '</div>';
                         }});
                     }} else {{
-                        // Добавляем ID для плейсхолдера, чтобы можно было удалить его позже
-                        html += '<div id="no-comments-placeholder" style="text-align: center; padding: 20px; color: #888;">No comments yet</div>';
+                        html += '<div id="no-comments-placeholder" style="text-align: center; padding: 20px; color: #888;">Комментариев пока нет</div>';
                     }}
             
                     drawerContent.innerHTML = html;
             
-                    // Показываем дровер
                     document.getElementById('comments-drawer-overlay').style.display = 'block';
             
                 }} catch (error) {{
@@ -2903,7 +2670,6 @@ def generate_chat_page_html(
                 }}
             }}
 
-            // Отправка сообщения
             function setupMessageSending() {{
                 const sendButton = document.getElementById('send-button');
                 const messageInput = document.getElementById('message-input');
@@ -2952,7 +2718,6 @@ def generate_chat_page_html(
                 }}
             }}
 
-            // Настройка модального окна
             function setupModal() {{
                 const modalOverlay = document.getElementById('entity-modal-overlay');
                 const closeModal = document.getElementById('close-modal');
@@ -2961,7 +2726,6 @@ def generate_chat_page_html(
 
                 if (!modalOverlay || !closeModal || !cancelModal || !entityForm) return;
 
-                // Закрытие модального окна
                 function closeModalFunc() {{
                     modalOverlay.style.display = 'none';
                     entityForm.reset();
@@ -2976,7 +2740,6 @@ def generate_chat_page_html(
                 closeModal.addEventListener('click', closeModalFunc);
                 cancelModal.addEventListener('click', closeModalFunc);
 
-                // Отправка формы Entity
                 entityForm.addEventListener('submit', async (e) => {{
                     e.preventDefault();
 
@@ -2987,7 +2750,6 @@ def generate_chat_page_html(
                         body: document.getElementById('entity-body').value,
                     }};
 
-                    // Добавляем дополнительные поля в зависимости от типа Entity
                     switch(entityType) {{
                         case 'question':
                             formData.priority = parseInt(document.getElementById('entity-priority').value) || 5;
@@ -3046,7 +2808,6 @@ def generate_chat_page_html(
                 }});
             }}
 
-            // Настройка дровера
             function setupDrawer() {{
                 const drawerOverlay = document.getElementById('comments-drawer-overlay');
                 const closeDrawer = document.getElementById('close-drawer');
@@ -3055,7 +2816,6 @@ def generate_chat_page_html(
 
                 if (!drawerOverlay || !closeDrawer || !sendCommentBtn || !commentInput) return;
 
-                // Закрытие дровера
                 drawerOverlay.addEventListener('click', (e) => {{
                     if (e.target === drawerOverlay) {{
                         drawerOverlay.style.display = 'none';
@@ -3066,7 +2826,6 @@ def generate_chat_page_html(
                     drawerOverlay.style.display = 'none';
                 }});
 
-                // Отправка комментария
                 async function sendComment() {{
                     const text = commentInput.value.trim();
                     if (!text || !currentThreadId) return;
@@ -3104,14 +2863,12 @@ def generate_chat_page_html(
                 }});
             }}
 
-            // Вспомогательная функция для экранирования HTML
             function escapeHtml(text) {{
                 const div = document.createElement('div');
                 div.textContent = text;
                 return div.innerHTML;
             }}
 
-            // Инициализация при загрузке страницы
             document.addEventListener('DOMContentLoaded', () => {{
                 try {{
                     loadNavigation();

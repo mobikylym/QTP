@@ -36,7 +36,6 @@ async def ensure_all_direct_chats_exist(session: AsyncSession):
             new_self_chat = DirectChat(is_self_chat=True)
             new_self_chat.users = [user]
             session.add(new_self_chat)
-            print(f'Created self-chat for user: {user.login}')
 
     existing_pairs = set()
     for chat in normal_chats:
@@ -58,16 +57,7 @@ async def ensure_all_direct_chats_exist(session: AsyncSession):
                 new_chat.users = [user1, user2]
                 session.add(new_chat)
                 created_count += 1
-                print(f'Created chat between: {user1.login} and {user2.login}')
 
     await session.commit()
 
-    user_count = len(users)
-    expected_pair_count = user_count * (user_count - 1) // 2
-
-    print('Direct chats check completed:')
-    print(f'  - Total users: {user_count}')
-    print(f'  - Expected pair chats: {expected_pair_count}')
-    print(f'  - Existing pair chats: {len(existing_pairs)}')
-    print(f'  - New pair chats created: {created_count}')
-    print(f'  - Total pair chats after: {len(existing_pairs) + created_count}')
+    print('Direct chats check completed!')

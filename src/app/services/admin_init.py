@@ -11,6 +11,7 @@ async def ensure_admin_exists(session: AsyncSession):
     admin = result.scalar_one_or_none()
 
     if admin:
+        print('Admin already exists!')
         return
 
     new_admin = User(
@@ -23,3 +24,4 @@ async def ensure_admin_exists(session: AsyncSession):
 
     session.add(new_admin)
     await session.commit()
+    print('Admin init successful!')

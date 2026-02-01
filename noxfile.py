@@ -7,7 +7,6 @@ import nox
 sys.path.insert(0, str(Path(__file__).parent.resolve()))
 
 BACKEND = Path('run.py')
-FRONTEND = Path('src/app/frontend/app.py')
 
 # mypy: disable-error-code=no-untyped-def
 
@@ -38,20 +37,6 @@ def lint(session):
     session.run('ruff', 'format', '.')
     session.run('ruff', 'check', '.', '--fix')
     session.run('mypy', '.')
-
-
-@nox.session(python=False)
-def backend(session):
-    subprocess.Popen(
-        ['uv', 'run', 'python', str(BACKEND)],
-    )
-
-
-@nox.session(python=False)
-def frontend(session):
-    subprocess.Popen(
-        ['uv', 'run', 'streamlit', 'run', str(FRONTEND), '--server.port', '8501'],
-    )
 
 
 @nox.session(python=False)

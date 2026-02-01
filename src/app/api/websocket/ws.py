@@ -7,7 +7,7 @@ class ConnectionManager:
 
     def get_room_key(self, room_type: str, room_id: str) -> str:
         """Генерирует ключ комнаты"""
-        return f"{room_type}_{room_id}"
+        return f'{room_type}_{room_id}'
 
     async def connect(self, websocket: WebSocket, room_type: str, room_id: str):
         await websocket.accept()
@@ -33,7 +33,6 @@ class ConnectionManager:
             try:
                 await ws.send_json(message)
             except Exception:
-                # Игнорируем сломанные соединения
                 pass
 
 

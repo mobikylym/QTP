@@ -15,35 +15,30 @@ from src.app.storage.models import DepartmentEnum, User
 @router.get('/profile/', response_class=HTMLResponse)
 async def profile_page(user_login=Depends(require_auth), session: AsyncSession = Depends(get_session)):
     """Страница профиля пользователя"""
-    # Получаем текущего пользователя
     user_query = select(User).where(User.login == user_login)
     user_result = await session.execute(user_query)
     user = user_result.scalar_one()
 
-    # Генерируем HTML страницу
     return generate_profile_page_html(user)
 
 
 def generate_profile_page_html(user: User) -> HTMLResponse:
     """Генерирует HTML страницу для профиля пользователя"""
-    # Экранируем данные для безопасной вставки в JavaScript
     user_id_escaped = json.dumps(str(user.id))
     user_login_escaped = json.dumps(user.login)
     user_display_name_escaped = json.dumps(user.display_name)
     user_department_escaped = json.dumps(user.department.value)
 
-    # Получаем все доступные отделы
     departments = [dept.value for dept in DepartmentEnum]
 
     html_content = f"""
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Profile - {user.display_name}</title>
+        <title>Профиль - {user.display_name}</title>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-            /* Reset box-sizing for all elements */
             *, *::before, *::after {{
                 box-sizing: border-box;
             }}
@@ -156,11 +151,11 @@ def generate_profile_page_html(user: User) -> HTMLResponse:
             .info-label {{
                 font-weight: bold;
                 color: #555;
-                min-width: 150px;
+                min-width: 200px;
             }}
             .info-value {{
                 color: #333;
-                flex: 1;
+                flex: 2;
             }}
             .edit-btn {{
                 padding: 10px 20px;
@@ -175,8 +170,6 @@ def generate_profile_page_html(user: User) -> HTMLResponse:
             .edit-btn:hover {{
                 background-color: #4752c4;
             }}
-
-            /* Модальное окно */
             .modal-overlay {{
                 position: fixed;
                 top: 0;
@@ -298,8 +291,6 @@ def generate_profile_page_html(user: User) -> HTMLResponse:
             .modal-alert {{
                 margin-bottom: 20px;
             }}
-
-            /* Responsive fixes */
             @media (max-width: 600px) {{
                 .container {{
                     grid-template-columns: 1fr;
@@ -326,39 +317,37 @@ def generate_profile_page_html(user: User) -> HTMLResponse:
     </head>
     <body>
         <div class="container">
-            <div class="sidebar" id="sidebar">
-                <!-- Навигация будет загружена через JavaScript -->
-            </div>
+            <div class="sidebar" id="sidebar"></div>
 
             <div class="main-content">
                 <div class="header">
-                    <h2>User Profile</h2>
+                    <h2>Профиль пользователя</h2>
                 </div>
 
                 <div class="profile-content">
                     <div class="profile-card">
                         <div class="profile-header">
-                            <div class="profile-title">Profile Information</div>
-                            <button class="edit-btn" id="edit-profile-btn">Edit Profile</button>
+                            <div class="profile-title">Общая информация</div>
+                            <button class="edit-btn" id="edit-profile-btn">Редактировать профиль</button>
                         </div>
                         
                         <div class="alert" id="page-alert-message"></div>
                         
                         <div class="profile-info">
                             <div class="info-row">
-                                <div class="info-label">Login:</div>
+                                <div class="info-label">Логин:</div>
                                 <div class="info-value" id="user-login">{user.login}</div>
                             </div>
                             <div class="info-row">
-                                <div class="info-label">Display Name:</div>
+                                <div class="info-label">Отображаемое имя:</div>
                                 <div class="info-value" id="user-display-name">{user.display_name}</div>
                             </div>
                             <div class="info-row">
-                                <div class="info-label">Department:</div>
+                                <div class="info-label">Отдел:</div>
                                 <div class="info-value" id="user-department">{user.department.value}</div>
                             </div>
                             <div class="info-row">
-                                <div class="info-label">Account Created:</div>
+                                <div class="info-label">Создан:</div>
                                 <div class="info-value">{user.created_at.strftime('%Y-%m-%d %H:%M') if user.created_at else 'N/A'}</div>
                             </div>
                         </div>
@@ -367,11 +356,10 @@ def generate_profile_page_html(user: User) -> HTMLResponse:
             </div>
         </div>
 
-        <!-- Модальное окно для редактирования профиля -->
         <div class="modal-overlay" id="edit-modal-overlay">
             <div class="modal" id="edit-modal">
                 <div class="modal-header">
-                    <div class="modal-title">Edit Profile</div>
+                    <div class="modal-title">Редактировать профиль</div>
                     <button class="close-modal" id="close-modal">&times;</button>
                 </div>
                 
@@ -379,36 +367,35 @@ def generate_profile_page_html(user: User) -> HTMLResponse:
                 
                 <form id="edit-profile-form">
                     <div class="form-group">
-                        <label class="form-label" for="edit-login">Login</label>
+                        <label class="form-label" for="edit-login">Логин</label>
                         <input type="text" class="form-input" id="edit-login" value="{user.login}" required>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label" for="edit-display-name">Display Name</label>
+                        <label class="form-label" for="edit-display-name">Отображаемое имя</label>
                         <input type="text" class="form-input" id="edit-display-name" value="{user.display_name}" required>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label" for="edit-password">New Password</label>
-                        <input type="password" class="form-input" id="edit-password" placeholder="Leave blank to keep current password">
-                        <div class="password-hint">Password must be at least 6 characters long</div>
+                        <label class="form-label" for="edit-password">Новый пароль</label>
+                        <input type="password" class="form-input" id="edit-password" placeholder="Оставьте пустым для сохранения текущего пароля">
+                        <div class="password-hint">Пароль должен содержать как минимум 6 символов</div>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label" for="edit-password-confirm">Confirm New Password</label>
-                        <input type="password" class="form-input" id="edit-password-confirm" placeholder="Confirm new password">
+                        <label class="form-label" for="edit-password-confirm">Подтверждение нового пароля</label>
+                        <input type="password" class="form-input" id="edit-password-confirm" placeholder="Повторите новый пароль">
                     </div>
 
                     <div class="modal-footer">
-                        <button type="button" class="cancel-btn" id="cancel-modal">Cancel</button>
-                        <button type="submit" class="save-btn">Save Changes</button>
+                        <button type="button" class="cancel-btn" id="cancel-modal">Отмена</button>
+                        <button type="submit" class="save-btn">Сохранить изменения</button>
                     </div>
                 </form>
             </div>
         </div>
 
         <script>
-            // Сохраняем данные пользователя
             const userData = {{
                 id: {user_id_escaped},
                 login: {user_login_escaped},
@@ -416,7 +403,6 @@ def generate_profile_page_html(user: User) -> HTMLResponse:
                 department: {user_department_escaped}
             }};
 
-            // Функция загрузки навигации (аналогичная чатам)
             async function loadNavigation() {{
                 try {{
                     const [userInfoRes, channelsRes, chatsRes] = await Promise.all([
@@ -438,18 +424,15 @@ def generate_profile_page_html(user: User) -> HTMLResponse:
 
                     let html = '';
 
-                    // Admin button
                     if (userInfo.is_admin) {{
-                        html += '<div id="admin-btn" onclick="openAdminPanel()" class="nav-item">Admin Panel</div>';
+                        html += '<div id="admin-btn" onclick="openAdminPanel()" class="nav-item">Панель администратора</div>';
                     }}
 
-                    // Profile section (активная)
-                    html += '<div id="profile-btn" class="nav-item active">Profile</div>';
-                    html += '<div id="notes-btn" class="nav-item">Notes</div>';
-                    html += '<div id="task-explorer" onclick="openTaskExplorer()" class="nav-item">Task Explorer</div>';
+                    html += '<div id="profile-btn" class="nav-item active">Профиль</div>';
+                    html += '<div id="notes-btn" class="nav-item">Заметки</div>';
+                    html += '<div id="task-explorer" onclick="openTaskExplorer()" class="nav-item">Обозреватель задач</div>';
 
-                    // Chats section
-                    html += '<div id="chats-toggle" class="nav-item">Chats ▼</div>';
+                    html += '<div id="chats-toggle" class="nav-item">Чаты ▼</div>';
                     html += '<div id="chats-submenu" class="submenu">';
 
                     for (const dept in chats) {{
@@ -466,8 +449,7 @@ def generate_profile_page_html(user: User) -> HTMLResponse:
 
                     html += '</div>';
 
-                    // Channels section
-                    html += '<div id="channels-toggle" class="nav-item">Channels ▼</div>';
+                    html += '<div id="channels-toggle" class="nav-item">Каналы ▼</div>';
                     html += '<div id="channels-submenu" class="submenu">';
 
                     for (const group in channels) {{
@@ -484,12 +466,10 @@ def generate_profile_page_html(user: User) -> HTMLResponse:
 
                     html += '</div>';
 
-                    // Logout
-                    html += '<div id="logout-btn" class="nav-item" onclick="logout()">Logout</div>';
+                    html += '<div id="logout-btn" class="nav-item" onclick="logout()">Выйти</div>';
 
                     sidebar.innerHTML = html;
 
-                    // Добавляем обработчики событий для toggle-меню
                     setupNavigationEvents();
 
                 }} catch (error) {{
@@ -497,9 +477,7 @@ def generate_profile_page_html(user: User) -> HTMLResponse:
                 }}
             }}
 
-            // Настройка событий навигации
             function setupNavigationEvents() {{
-                // Toggle для Chats
                 const chatsToggle = document.getElementById('chats-toggle');
                 const chatsSubmenu = document.getElementById('chats-submenu');
                 if (chatsToggle && chatsSubmenu) {{
@@ -509,7 +487,6 @@ def generate_profile_page_html(user: User) -> HTMLResponse:
                     chatsSubmenu.style.display = 'flex';
                 }}
 
-                // Toggle для Channels
                 const channelsToggle = document.getElementById('channels-toggle');
                 const channelsSubmenu = document.getElementById('channels-submenu');
                 if (channelsToggle && channelsSubmenu) {{
@@ -519,7 +496,6 @@ def generate_profile_page_html(user: User) -> HTMLResponse:
                     channelsSubmenu.style.display = 'flex';
                 }}
 
-                // Notes button
                 const notesBtn = document.getElementById('notes-btn');
                 if (notesBtn) {{
                     notesBtn.addEventListener('click', async () => {{
@@ -538,7 +514,6 @@ def generate_profile_page_html(user: User) -> HTMLResponse:
                 }}
             }}
 
-            // Функции перехода
             function openAdminPanel() {{
                 window.location.href = '/admin/';
             }}
@@ -555,19 +530,15 @@ def generate_profile_page_html(user: User) -> HTMLResponse:
                 window.location.href = '/channel/' + channelId + '/';
             }}
 
-            // Функция выхода
             function logout() {{
-                // Создаем невидимую форму
                 const form = document.createElement('form');
                 form.method = 'POST';
                 form.action = '/logout';
                                 
-                // Добавляем форму в документ и отправляем
                 document.body.appendChild(form);
                 form.submit();
             }}
 
-            // Настройка модального окна редактирования
             function setupEditModal() {{
                 const modalOverlay = document.getElementById('edit-modal-overlay');
                 const closeModal = document.getElementById('close-modal');
@@ -578,19 +549,16 @@ def generate_profile_page_html(user: User) -> HTMLResponse:
 
                 if (!modalOverlay || !closeModal || !cancelModal || !editBtn || !editForm) return;
 
-                // Функция для показа уведомлений в модальном окне
                 function showModalAlert(message, type) {{
                     modalAlert.textContent = message;
                     modalAlert.className = 'alert alert-' + type + ' modal-alert';
                     modalAlert.style.display = 'block';
                     
-                    // Автоматически скрыть через 5 секунд
                     setTimeout(() => {{
                         modalAlert.style.display = 'none';
                     }}, 5000);
                 }}
 
-                // Функция для показа уведомлений на странице
                 function showPageAlert(message, type) {{
                     const pageAlert = document.getElementById('page-alert-message');
                     pageAlert.textContent = message;
@@ -602,20 +570,16 @@ def generate_profile_page_html(user: User) -> HTMLResponse:
                     }}, 2000);
                 }}
 
-                // Открытие модального окна
                 editBtn.addEventListener('click', () => {{
-                    // Сбрасываем уведомления при открытии модального окна
                     modalAlert.style.display = 'none';
                     modalOverlay.style.display = 'flex';
                     
-                    // Заполняем поля текущими значениями
                     document.getElementById('edit-login').value = userData.login;
                     document.getElementById('edit-display-name').value = userData.displayName;
                     document.getElementById('edit-password').value = '';
                     document.getElementById('edit-password-confirm').value = '';
                 }});
 
-                // Закрытие модального окна
                 function closeModalFunc() {{
                     modalOverlay.style.display = 'none';
                     editForm.reset();
@@ -630,7 +594,6 @@ def generate_profile_page_html(user: User) -> HTMLResponse:
                 closeModal.addEventListener('click', closeModalFunc);
                 cancelModal.addEventListener('click', closeModalFunc);
 
-                // Отправка формы
                 editForm.addEventListener('submit', async (e) => {{
                     e.preventDefault();
 
@@ -639,19 +602,18 @@ def generate_profile_page_html(user: User) -> HTMLResponse:
                     const password = document.getElementById('edit-password').value;
                     const passwordConfirm = document.getElementById('edit-password-confirm').value;
 
-                    // Валидация
                     if (!login || !displayName) {{
-                        showModalAlert('Login and display name are required', 'error');
+                        showModalAlert('Логин и отображаемое имя обязательны', 'error');
                         return;
                     }}
 
                     if (password) {{
                         if (password.length < 6) {{
-                            showModalAlert('Password must be at least 6 characters long', 'error');
+                            showModalAlert('Пароль должен содержать как минимум 6 символов', 'error');
                             return;
                         }}
                         if (password !== passwordConfirm) {{
-                            showModalAlert('Passwords do not match', 'error');
+                            showModalAlert('Пароли не совпадают', 'error');
                             return;
                         }}
                     }}
@@ -661,7 +623,6 @@ def generate_profile_page_html(user: User) -> HTMLResponse:
                         display_name: displayName
                     }};
 
-                    // Добавляем пароль только если он был изменен
                     if (password) {{
                         formData.password = password;
                     }}
@@ -678,32 +639,27 @@ def generate_profile_page_html(user: User) -> HTMLResponse:
                         if (response.ok) {{
                             const result = await response.json();
                             
-                            // Показываем успешное сообщение на странице
-                            showPageAlert('Profile updated successfully!', 'success');
+                            showPageAlert('Профиль успешно обновлён!', 'success');
 
-                            // Обновляем данные на странице
                             document.getElementById('user-login').textContent = result.login || login;
                             document.getElementById('user-display-name').textContent = result.display_name || displayName;
 
-                            // Обновляем данные в userData
                             userData.login = result.login || login;
                             userData.displayName = result.display_name || displayName;
 
-                            // Закрываем модальное окно
                             closeModalFunc();
 
                         }} else {{
                             const error = await response.json();
-                            showModalAlert(error.detail || 'Failed to update profile', 'error');
+                            showModalAlert(error.detail || 'Ошибка обновления профиля', 'error');
                         }}
                     }} catch (error) {{
                         console.error('Error updating profile:', error);
-                        showModalAlert('Error updating profile', 'error');
+                        showModalAlert('Ошибка обновления профиля:', 'error');
                     }}
                 }});
             }}
 
-            // Инициализация при загрузке страницы
             document.addEventListener('DOMContentLoaded', () => {{
                 try {{
                     loadNavigation();
@@ -725,27 +681,23 @@ async def update_user(
     update_data: dict, user_login=Depends(require_auth), session: AsyncSession = Depends(get_session)
 ):
     """Обновление данных текущего пользователя"""
-    # Получаем текущего пользователя
     user_query = select(User).where(User.login == user_login)
     user_result = await session.execute(user_query)
     user = user_result.scalar_one()
 
-    # Проверяем уникальность логина, если он изменяется
     if update_data.get('login') and update_data.get('login') != user.login:
         existing_user_query = select(User).where(User.login == update_data.get('login'))
         existing_user_result = await session.execute(existing_user_query)
         existing_user = existing_user_result.scalar_one_or_none()
 
         if existing_user:
-            raise HTTPException(status_code=400, detail='Login already taken')
+            raise HTTPException(status_code=400, detail='Логин уже занят')
 
-    # Обновляем данные
     if update_data.get('login'):
         user.login = update_data.get('login')
     if update_data.get('display_name'):
         user.display_name = update_data.get('display_name')
 
-    # Обновляем пароль, если предоставлен
     if update_data.get('password'):
         user.password_hash = hash_password(update_data.get('password'))
 

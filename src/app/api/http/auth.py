@@ -13,8 +13,14 @@ from src.app.storage.models import User
 
 pwd = CryptContext(schemes=['bcrypt'], deprecated='auto')
 JWT_SECRET = 'change_me'
-JWT_ALGORITHM = "HS256"
+JWT_ALGORITHM = 'HS256'
 JWT_EXP = 3600
+
+
+@router.get('/', response_class=HTMLResponse)
+async def default_page():
+    response = RedirectResponse(url='/login', status_code=302)
+    return response
 
 
 @router.get('/login', response_class=HTMLResponse)
@@ -22,6 +28,9 @@ async def login_page():
     return """
     <html>
       <head>
+        <title>QTP</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
           body {
             display: grid;
@@ -89,11 +98,11 @@ async def login_page():
       <body>
         <div class="login-container">
           <form id="loginForm">
-            <label>Username</label>
+            <label>Имя пользователя</label>
             <input type="text" name="username" required>
-            <label>Password</label>
+            <label>Пароль</label>
             <input type="password" name="password" required>
-            <button type="submit">Login</button>
+            <button type="submit">Войти</button>
           </form>
         </div>
         <div id="toast" class="toast">
@@ -207,10 +216,10 @@ async def logged_out_page():
     </head>
     <body>
         <div class="message-box">
-            <h2>Successfully Logged Out</h2>
-            <p>You have been successfully logged out of the system.</p>
-            <div class="countdown">Redirecting to login page in <span id="countdown">3</span> seconds...</div>
-            <a href="/login" class="button">Go to Login Now</a>
+            <h2>Выход из системы успешен</h2>
+            <p>Вы были успешно разлогинены.</p>
+            <div class="countdown">Перенаправление на страницу авторизации через <span id="countdown">3</span></div>
+            <a href="/login" class="button">Перейти на страницу авторизации</a>
         </div>
 
         <script>
@@ -227,7 +236,6 @@ async def logged_out_page():
                 }
             }, 1000);
 
-            // Автоматический редирект через 3 секунды на всякий случай
             setTimeout(() => {
                 window.location.href = '/login';
             }, 3000);

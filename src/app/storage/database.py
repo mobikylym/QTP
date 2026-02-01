@@ -12,6 +12,5 @@ class Base(DeclarativeBase):
 
 
 async def init_models():
-    # Создаём таблицы для прототипа (в production — Alembic)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
